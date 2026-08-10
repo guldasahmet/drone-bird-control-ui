@@ -1,0 +1,106 @@
+@define-color bg #05080d;
+@define-color panel #090f18;
+@define-color panel2 #0c1420;
+@define-color border #1a2b3d;
+@define-color cyan #29a9ff;
+@define-color cyan2 #6cc8ff;
+@define-color red #ff3347;
+@define-color green #39d98a;
+@define-color amber #ffc857;
+@define-color text #e7eef7;
+@define-color muted #73859a;
+
+* {
+  font-family: "DejaVu Sans", sans-serif;
+  color: @text;
+}
+
+window, .background { background-color: @bg; }
+
+.topbar {
+  background-image: linear-gradient(to right, #080d14, #0a1320);
+  border-bottom: 1px solid @border;
+}
+
+.brand { color: #ffffff; font-size: 22px; font-weight: 800; letter-spacing: 2px; }
+.subtitle, .hint { color: @muted; font-size: 9px; }
+.clock { color: #a7b8ca; font-family: monospace; font-size: 12px; }
+.status-ready { color: @amber; font-weight: 700; }
+.status-running, .valid { color: @green; font-weight: 700; }
+.status-error { color: @red; font-weight: 700; }
+
+paned separator { background: @border; min-width: 1px; }
+.sidebar { background: @panel; }
+
+.video-card {
+  border: 1px solid #1b344c;
+  background: #000000;
+  border-radius: 3px;
+}
+
+.video-placeholder {
+  color: #526579;
+  font-size: 13px;
+  background-color: rgba(2, 5, 8, 0.90);
+}
+
+.section, .card {
+  background: @panel2;
+  border: 1px solid @border;
+  border-radius: 4px;
+}
+
+.section-title {
+  color: @cyan2;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.field-label, .footer-title { color: @muted; font-size: 9px; font-weight: 700; }
+.metric, .metric-mono, .metric-cyan { font-size: 13px; font-weight: 700; }
+.metric-mono { font-family: monospace; }
+.metric-cyan { color: @cyan2; font-family: monospace; }
+
+.active-class { color: #ffffff; font-size: 22px; font-weight: 800; }
+.active-confidence { color: @red; font-size: 22px; font-weight: 800; }
+.direction { color: @cyan2; font-size: 18px; font-weight: 800; }
+.state-searching { color: @muted; font-weight: 800; }
+.state-acquiring { color: @amber; font-weight: 800; }
+.state-tracking { color: @cyan; font-weight: 800; }
+.state-locked { color: @green; font-weight: 800; }
+
+entry, combobox button, button {
+  background-image: none;
+  background-color: #101b29;
+  border: 1px solid #263a50;
+  border-radius: 3px;
+  min-height: 30px;
+  color: @text;
+}
+
+button:hover { background-color: #17283a; border-color: @cyan; }
+.primary-button { background-color: #0e5f96; border-color: @cyan; font-weight: 800; }
+.danger-button { background-color: #46141d; border-color: #8c2937; font-weight: 800; }
+
+scale trough { background: #172433; min-height: 4px; border-radius: 2px; }
+scale highlight { background: @cyan; }
+scale slider { background: @cyan2; border: 0; min-width: 14px; min-height: 14px; border-radius: 8px; }
+
+treeview {
+  background-color: #080e16;
+  color: #cbd8e6;
+  font-family: monospace;
+  font-size: 11px;
+}
+treeview:selected { background-color: #123b5b; color: white; }
+treeview header button { background-color: #0d1723; color: @muted; font-size: 9px; font-weight: 800; }
+
+scrollbar trough { background: #080d14; }
+scrollbar slider { background: #26394d; min-width: 7px; min-height: 7px; border-radius: 4px; }
+
+.footer {
+  background: #070c12;
+  border-top: 1px solid @border;
+}
+.footer-value { color: #bdccdb; font-family: monospace; font-size: 10px; font-weight: 700; }
