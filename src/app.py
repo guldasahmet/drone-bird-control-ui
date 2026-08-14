@@ -19,6 +19,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 DEFAULT_MODEL = Path("/usr/share/hailo-models/yolov8s_h8.hef")
 DEFAULT_LABELS = PROJECT_ROOT / "config" / "coco_labels.json"
+LIVE_WIDTH = 640
+LIVE_HEIGHT = 480
+CAMERA_FPS = 40
 
 
 def css_class(widget, name):
@@ -109,7 +112,7 @@ class ControlWindow(Gtk.Window):
         self.video_overlay = Gtk.Overlay()
         video_card.add(self.video_overlay)
         self.video_host = Gtk.Box()
-        self.video_host.set_size_request(720, 405)
+        self.video_host.set_size_request(LIVE_WIDTH, LIVE_HEIGHT)
         self.video_overlay.add(self.video_host)
 
         self.video_placeholder = label(
@@ -218,7 +221,10 @@ class ControlWindow(Gtk.Window):
         source_row.pack_start(self.source_combo, True, True, 0)
         source_row.pack_end(self.video_button, False, False, 0)
         box.pack_start(source_row, False, False, 0)
-        self.video_status = label("1280×720 @ 40 FPS", "hint")
+        self.video_status = label(
+            f"{LIVE_WIDTH}×{LIVE_HEIGHT} @ {CAMERA_FPS} FPS",
+            "hint",
+        )
         self.video_status.set_ellipsize(3)
         box.pack_start(self.video_status, False, False, 0)
 
@@ -404,7 +410,9 @@ class ControlWindow(Gtk.Window):
                 self.video_path.name if self.video_path else "Video seçilmedi"
             )
         else:
-            self.video_status.set_text("1280×720 @ 40 FPS")
+            self.video_status.set_text(
+                f"{LIVE_WIDTH}×{LIVE_HEIGHT} @ {CAMERA_FPS} FPS"
+            )
 
     def _threshold_changed(self, scale):
         value = scale.get_value()
@@ -423,9 +431,9 @@ class ControlWindow(Gtk.Window):
             labels_path=str(DEFAULT_LABELS),
             source=source,
             video_path=str(self.video_path) if self.video_path else None,
-            width=1280,
-            height=720,
-            frame_rate=40 if source == "camera" else 30,
+            width=LIVE_WIDTH,
+            height=LIVE_HEIGHT,
+            frame_rate=CAMERA_FPS if source == "camera" else 30,
             display_threshold=self.threshold_scale.get_value(),
         )
         try:

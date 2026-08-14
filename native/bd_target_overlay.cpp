@@ -22,6 +22,8 @@ typedef struct _GstBdTargetOverlayClass {
 
 G_DEFINE_TYPE(GstBdTargetOverlay, gst_bd_target_overlay, GST_TYPE_VIDEO_FILTER)
 
+constexpr gint LOCK_TOLERANCE_PX = 25;
+
 static inline void set_rgb(
     guint8 *data, gint stride, gint width, gint height,
     gint x, gint y, guint8 red, guint8 green, guint8 blue)
@@ -62,6 +64,26 @@ static void draw_red_line(
     }
 }
 
+static void draw_lock_tolerance_box(
+    guint8 *data, gint stride, gint width, gint height,
+    gint center_x, gint center_y)
+{
+    const gint left = center_x - LOCK_TOLERANCE_PX;
+    const gint right = center_x + LOCK_TOLERANCE_PX;
+    const gint top = center_y - LOCK_TOLERANCE_PX;
+    const gint bottom = center_y + LOCK_TOLERANCE_PX;
+
+    // One-pixel yellow outline: the interior remains unobstructed.
+    for (gint x = left; x <= right; ++x) {
+        set_rgb(data, stride, width, height, x, top, 255, 255, 0);
+        set_rgb(data, stride, width, height, x, bottom, 255, 255, 0);
+    }
+    for (gint y = top; y <= bottom; ++y) {
+        set_rgb(data, stride, width, height, left, y, 255, 255, 0);
+        set_rgb(data, stride, width, height, right, y, 255, 255, 0);
+    }
+}
+
 static GstFlowReturn gst_bd_target_overlay_transform_frame_ip(
     GstVideoFilter *, GstVideoFrame *frame)
 {
@@ -99,9 +121,12 @@ static GstFlowReturn gst_bd_target_overlay_transform_frame_ip(
         }
     }
 
-    // Tiny 5x5 white x at the optical/image centre.
+    // The lock condition is abs(error_x/y) <= 25 px. Draw that exact area
+    // around the optical centre, then keep the tiny white centre marker.
     const gint center_x = width / 2;
     const gint center_y = height / 2;
+    draw_lock_tolerance_box(
+        data, stride, width, height, center_x, center_y);
     for (gint offset = -2; offset <= 2; ++offset) {
         set_rgb(data, stride, width, height,
                 center_x + offset, center_y + offset, 255, 255, 255);

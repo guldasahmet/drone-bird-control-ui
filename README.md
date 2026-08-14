@@ -57,8 +57,12 @@ eksen kullanılabilir; seri haberleşme bu sürümde etkin değildir.
   telemetrisi 1 Hz güncellenir.
 - Picamera2 capture thread'i IMX296'dan `BGR888` ister. Pi kamera katmanındaki
   RGB bellek düzeni doğrudan `appsrc`'a gönderilir; Python `cvtColor` yapmaz.
+- Canlı kamera ve görüntü alanı `640×480 @ 40 FPS` olarak yapılandırılmıştır;
+  hata hesabının ekran merkezi `(320, 240)` pikseldir.
 - GStreamer capture, ölçekleme, inference, overlay ve Wayland sunumu için ayrı
   native worker thread'leri kullanır.
+- Görüntü modelden önce X eksenine göre aynalanır (yukarı-aşağı çevrilir);
+  kutular, hedef çizgisi ve işaretli Y hatası aynı koordinat sisteminde kalır.
 - Hailo-8, YOLOv8s inference'ını batch 1 olarak çalıştırır.
 - Metadata filtresi yalnız `CELL PHONE` etiketini ByteTrack'e geçirir.
 - Aynı sınıf kutuları IoU ile tekilleştirilir ve iki karede doğrulanır.
@@ -66,16 +70,15 @@ eksen kullanılabilir; seri haberleşme bu sürümde etkin değildir.
   aktarılır.
 - Kutular Hailo'nun native RGB overlay'iyle çizilir. Merkez ve aktif hedef
   çizgisi `bdtargetoverlay` C++ filtresinde kare kopyalanmadan çizilir.
+- Görüntü merkezindeki ince sarı çerçeve, her eksende `±25 px` kilit
+  toleransını gösterir.
 - `gtkwaylandsink` native Wayland widget'ına render eder; XWayland/GL köprüsü ve
   ayrı Cairo repaint döngüsü yoktur.
 - Kamera kuyrukları en fazla bir güncel kare tutar ve geciken eski kareyi atar.
 - Video dosyaları inference'dan önce kendi PTS saatine bağlanır.
 
-Gerçek IMX296 + Hailo-8 testinde resmi YOLOv8s modeli `1280×720 @ 40 FPS`
-akışta `40.00 FPS`, `%60.7` toplam uygulama CPU'su ve `37.71 ms` ölçülen
-pipeline gecikmesi verdi. COCO telefon görüntüsü testinde `CELL PHONE ID=1`,
-kırmızı kutu, aktif çizgi ve pixel/normalize telemetri `29.99 FPS` ile
-doğrulandı.
+COCO telefon görüntüsü testinde `CELL PHONE ID=1`, kırmızı kutu, aktif çizgi
+ve piksel/normalize telemetri doğrulandı.
 
 ## Native overlay
 
@@ -86,7 +89,7 @@ GStreamer plugin yoluna ekler. Elle derlemek için:
 ./native/build.sh
 ```
 
-Bir subprocess'e 1280×720 RGB kareleri 40 FPS taşımak yaklaşık `110 MB/s` ham
+Bir subprocess'e 640×480 RGB kareleri 40 FPS taşımak yaklaşık `37 MB/s` ham
 IPC trafiği ve ek kopyalama oluşturur. GStreamer ağır aşamaları zaten native
 thread'lere dağıttığı için ayrı görüntü process'i kullanılmaz.
 

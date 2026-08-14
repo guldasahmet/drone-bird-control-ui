@@ -32,7 +32,12 @@ from hailo_apps.python.core.gstreamer.gstreamer_helper_pipelines import (
     get_camera_resolution,
 )
 
-from tracking import ClassAwareByteTracker, TargetTelemetry, TrackingResult
+from tracking import (
+    UART_INVERT_X,
+    ClassAwareByteTracker,
+    TargetTelemetry,
+    TrackingResult,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_PLUGIN_DIR = PROJECT_ROOT / "native" / "build"
@@ -53,8 +58,8 @@ class RuntimeConfig:
     labels_path: str
     source: str = "camera"
     video_path: str | None = None
-    width: int = 1280
-    height: int = 720
+    width: int = 640
+    height: int = 480
     frame_rate: int = 40
     display_threshold: float = 0.30
     exposure_us: int | None = None
@@ -339,6 +344,13 @@ class VisionRuntime:
             if config.source == "video"
             else ""
         )
+        # Mirror across the X axis before inference (top <-> bottom). Since
+        # inference sees the mirrored pixels, boxes, the active-target line
+        # and signed Y error all share the displayed coordinate system.
+        x_axis_mirror = (
+            " ! videoflip name=ui_x_axis_mirror "
+            "video-direction=vert qos=false"
+        )
         # Never let stale frames queue up behind inference or presentation.
         # This is essential for pan/tilt control: a fresh frame is preferable
         # to displaying an old frame later.
@@ -356,7 +368,10 @@ class VisionRuntime:
             f"gtkwaylandsink name=ui_video_sink sync={sync} qos=false "
             "enable-last-sample=false"
         )
-        return f"{source}{source_clock} ! {wrapper} ! {callback} ! {display}"
+        return (
+            f"{source}{source_clock}{x_axis_mirror} ! "
+            f"{wrapper} ! {callback} ! {display}"
+        )
 
     def _on_frame(self, element, buffer):
         started = perf_counter()
@@ -404,12 +419,21 @@ class VisionRuntime:
                 for target in tracking.targets
                 if target.track_id == tracking.active_id
             )
+            uart_dx_px = -active.dx_px if UART_INVERT_X else active.dx_px
+            uart_dx_norm = (
+                -active.dx_norm if UART_INVERT_X else active.dx_norm
+            )
             print(
-                f"AIM frame={self.frame_index} {active.label} ID={active.track_id} "
-                f"PIXEL(dx={active.dx_px:+.1f},dy={active.dy_px:+.1f},"
-                f"error={active.error_px:.1f}) "
-                f"NORMALIZED(dx={active.dx_norm:+.4f},dy={active.dy_norm:+.4f},"
-                f"error={active.error_norm:.4f})"
+                f"HEDEF frame={self.frame_index} "
+                f"{active.label} ID={active.track_id} | "
+                f"GORUNTU_DX={active.dx_px:+.1f}px "
+                f"GORUNTU_DY={active.dy_px:+.1f}px | "
+                f"UART_HATA_X={uart_dx_px:+.1f}px "
+                f"UART_HATA_Y={active.dy_px:+.1f}px | "
+                f"UART_X_NORM={uart_dx_norm:+.4f} "
+                f"UART_Y_NORM={active.dy_norm:+.4f} | "
+                f"TOPLAM_HATA={active.error_px:.1f}px",
+                flush=True,
             )
 
     @staticmethod
