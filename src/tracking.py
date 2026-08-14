@@ -1,46 +1,19 @@
-"""Hailo ByteTrack hedef takibi ve STM32 UART haberleşmesi.
-
-UART paket yapısı (5 byte, little-endian)::
-
-    <Bhh
-
-    Byte 0..0 : 0xFF = takip ediliyor, 0xFE = hedef merkezde
-    Byte 1..2 : hata_x, signed int16
-    Byte 3..4 : hata_y, signed int16
-
-Hata işaretleri::
-
-    hata_x < 0 : hedef görüntü merkezinin solunda
-    hata_x > 0 : hedef görüntü merkezinin sağında
-    hata_y < 0 : hedef görüntü merkezinin üstünde
-    hata_y > 0 : hedef görüntü merkezinin altında
-
-X eksenine göre aynalama, görüntünün yukarı-aşağı çevrilmesidir. Gerçek
-görüntü karesine erişilen yerde ``mirror_frame_x_axis(frame)`` çağrılmalıdır.
-GStreamer kullanılıyorsa aynı işlem modelden önce
-``videoflip method=vertical-flip`` elemanı eklenerek yapılabilir.
-"""
+"""DRONE/BIRD sınıfları için ByteTrack ve aktif hedef seçimi."""
 
 from dataclasses import dataclass
 from math import hypot
 from threading import RLock
-from time import monotonic, sleep
+from time import monotonic
 from types import SimpleNamespace
-import struct
 
 import hailo
 import numpy as np
-import serial
 
 from hailo_apps.python.core.tracker.basetrack import BaseTrack
 from hailo_apps.python.core.tracker.byte_tracker import BYTETracker
 
 
-CLASS_LABELS = ("CELL PHONE",)
-
-PACKET_TRACKING = 0xFF
-PACKET_LOCKED = 0xFE
-UART_INVERT_X = True
+CLASS_LABELS = ("DRONE", "BIRD")
 
 
 @dataclass(frozen=True)
@@ -216,7 +189,7 @@ def _target_telemetry(track_id, label, confidence, box, width, height):
 
 
 class ClassAwareByteTracker:
-    """Seçilen sınıfları takip eder ve aktif hedefi UART ile gönderir."""
+    """Her sınıfı ayrı izler ve önceliğe göre tek aktif hedef seçer."""
 
     def __init__(
         self,
@@ -231,9 +204,8 @@ class ClassAwareByteTracker:
         display_match_iou=0.10,
         lock_tolerance_px=25,
         class_labels=CLASS_LABELS,
-        serial_port="/dev/ttyACM0",
-        baudrate=115200,
-        serial_enabled=True,
+        priority_labels=CLASS_LABELS,
+        sticky_labels=("DRONE",),
     ):
         self._lock = RLock()
 
@@ -248,9 +220,15 @@ class ClassAwareByteTracker:
         self.display_match_iou = display_match_iou
         self.lock_tolerance_px = max(0, int(lock_tolerance_px))
         self.class_labels = tuple(label.upper() for label in class_labels)
+        self.priority_labels = tuple(label.upper() for label in priority_labels)
+        self.sticky_labels = frozenset(label.upper() for label in sticky_labels)
 
         if not self.class_labels:
             raise ValueError("En az bir takip sınıfı gerekli")
+        if set(self.priority_labels) != set(self.class_labels):
+            raise ValueError("Öncelik sırası takip sınıflarını tam olarak içermeli")
+        if not self.sticky_labels.issubset(self.class_labels):
+            raise ValueError("Sabit tutulacak sınıflar takip sınıflarında bulunmalı")
 
         self.trackers = {}
         self.confirmed_ids = set()
@@ -258,39 +236,7 @@ class ClassAwareByteTracker:
         self.manual_id = None
         self.lock_started_at = None
 
-        self.serial_port = serial_port
-        self.baudrate = int(baudrate)
-        self.serial_enabled = bool(serial_enabled)
-        self.ser = None
-
-        if self.serial_enabled:
-            self._open_serial()
-
         self.reset()
-
-    def _open_serial(self):
-        try:
-            self.ser = serial.Serial(
-                self.serial_port,
-                self.baudrate,
-                timeout=0,
-                write_timeout=0.1,
-            )
-
-            print(
-                "Seri bağlantı başarılı: "
-                f"{self.serial_port} @ {self.baudrate}"
-            )
-
-            sleep(0.3)
-            self.ser.reset_input_buffer()
-            self.ser.reset_output_buffer()
-
-        except (OSError, serial.SerialException) as error:
-            self.ser = None
-            raise RuntimeError(
-                f"Seri port açılamadı ({self.serial_port}): {error}"
-            ) from error
 
     def reset(self):
         with self._lock:
@@ -328,91 +274,8 @@ class ClassAwareByteTracker:
             self.active_id = self.manual_id
             self.lock_started_at = None
 
-    @staticmethod
-    def _int16_limit(value):
-        # Referans OpenCV kodundaki int(hata_x) / int(hata_y) davranışı:
-        # kesirli piksel değeri yuvarlanmaz, sıfıra doğru kesilir.
-        return max(-32768, min(32767, int(value)))
-
-    def _send_packet(self, header, hata_x, hata_y):
-        if self.ser is None or not self.ser.is_open:
-            return
-
-        hata_x = self._int16_limit(hata_x)
-        hata_y = self._int16_limit(hata_y)
-        packet = struct.pack("<Bhh", int(header), hata_x, hata_y)
-
-        try:
-            self.ser.write(packet)
-        except (OSError, serial.SerialException) as error:
-            print(f"UART gönderme hatası: {error}")
-
-    def koordinat_gonder(self, hata_x, hata_y):
-        self._send_packet(PACKET_TRACKING, hata_x, hata_y)
-
-    def hedefe_varildi_gonder(self, hata_x, hata_y):
-        self._send_packet(PACKET_LOCKED, hata_x, hata_y)
-
-    def _read_serial_message(self):
-        if self.ser is None or not self.ser.is_open:
-            return
-
-        try:
-            waiting = self.ser.in_waiting
-
-            if waiting <= 0:
-                return
-
-            message = self.ser.read(waiting).decode(
-                "utf-8",
-                errors="ignore",
-            ).strip()
-
-            if message:
-                print(f"STM32: {message}")
-
-        except (OSError, serial.SerialException) as error:
-            print(f"UART okuma hatası: {error}")
-
-    def _send_active_target(self, targets):
-        active = next(
-            (
-                target
-                for target in targets
-                if target.track_id == self.active_id
-            ),
-            None,
-        )
-
-        if active is None:
-            # Hedef yok. 0xFF başlığı, merkezde kilitli bir hedef olmadığını
-            # 0xFE paketinden ayırır.
-            self.koordinat_gonder(0, 0)
-            self._read_serial_message()
-            return
-
-        hata_x = self._int16_limit(active.dx_px)
-        hata_y = self._int16_limit(active.dy_px)
-
-        kilit_x = abs(hata_x) <= self.lock_tolerance_px
-        kilit_y = abs(hata_y) <= self.lock_tolerance_px
-        tam_kilit = kilit_x and kilit_y
-
-        if tam_kilit:
-            self.hedefe_varildi_gonder(
-                -hata_x if UART_INVERT_X else hata_x,
-                hata_y,
-            )
-        else:
-            self.koordinat_gonder(
-                -hata_x if UART_INVERT_X else hata_x,
-                hata_y,
-            )
-
-        self._read_serial_message()
-
     def process(self, roi, width, height, frame=None):
-        """Bir Hailo ROI'sini işler ve aktif hedefi UART ile gönderir.
+        """Bir Hailo ROI'sini işler ve doğrulanmış hedefleri döndürür.
 
         ``frame`` verilirse görüntü x eksenine göre yerinde aynalanır. Bu
         durumda algılama kutularının Y koordinatları da çevrilerek görüntüyle
@@ -528,9 +391,6 @@ class ClassAwareByteTracker:
             self._select_active_target(targets)
             state, lock_seconds = self._lock_state(targets, raw_count)
 
-            # Her işlenen karede yalnızca aktif hedefin hata değerleri gönderilir.
-            self._send_active_target(targets)
-
             return TrackingResult(
                 targets=tuple(targets),
                 active_id=self.active_id,
@@ -540,24 +400,31 @@ class ClassAwareByteTracker:
             )
 
     def _select_active_target(self, targets):
-        visible_ids = {target.track_id for target in targets}
+        visible_by_id = {target.track_id: target for target in targets}
 
         if self.manual_id is not None:
-            if self.manual_id in visible_ids:
+            if self.manual_id in visible_by_id:
                 self.active_id = self.manual_id
                 return
 
             self.manual_id = None
 
-        if self.active_id in visible_ids:
-            return
-
         previous_id = self.active_id
-        self.active_id = (
-            min(targets, key=lambda target: target.error_norm).track_id
-            if targets
-            else None
-        )
+        current = visible_by_id.get(self.active_id)
+        selected = None
+
+        for label in self.priority_labels:
+            candidates = [target for target in targets if target.label == label]
+            if not candidates:
+                continue
+
+            if current is not None and current.label == label and label in self.sticky_labels:
+                selected = current
+            else:
+                selected = min(candidates, key=lambda target: target.error_norm)
+            break
+
+        self.active_id = selected.track_id if selected is not None else None
 
         if self.active_id != previous_id:
             self.lock_started_at = None
@@ -591,18 +458,3 @@ class ClassAwareByteTracker:
             self.lock_started_at = now
 
         return "LOCKED", now - self.lock_started_at
-
-    def close(self):
-        with self._lock:
-            if self.ser is not None and self.ser.is_open:
-                self.ser.close()
-                print("Seri port kapatıldı.")
-
-            self.ser = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
-        return False

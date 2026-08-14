@@ -1,0 +1,30 @@
+[model]
+path = "models/yolo11s.hef"
+labels = "config/labels.json"
+expected_classes = 2
+
+[video]
+width = 640
+height = 480
+camera_fps = 40
+mirror_x_axis = true
+
+[tracking]
+classes = ["DRONE", "BIRD"]
+priority = ["DRONE", "BIRD"]
+sticky_labels = ["DRONE"]
+confidence = 0.30
+low_threshold = 0.10
+high_threshold = 0.25
+new_track_threshold = 0.35
+match_threshold = 0.85
+display_match_iou = 0.10
+track_buffer = 2
+min_confirmed_hits = 2
+lock_tolerance_px = 25
+
+[uart]
+enabled = true
+port = "/dev/ttyACM0"
+baudrate = 115200
+invert_x = true

@@ -20,6 +20,7 @@ native/build/
 
 # Local models, recordings and runtime output
 *.hef
+!models/yolo11s.hef
 *.mp4
 *.webm
 *.avi

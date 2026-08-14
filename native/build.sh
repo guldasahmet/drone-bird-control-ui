@@ -3,7 +3,7 @@ set -euo pipefail
 
 NATIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${NATIVE_DIR}/build"
-SOURCE="${NATIVE_DIR}/bd_target_overlay.cpp"
+SOURCE="${NATIVE_DIR}/target_overlay.cpp"
 OUTPUT="${BUILD_DIR}/libgstbdtargetoverlay.so"
 
 mkdir -p "${BUILD_DIR}"

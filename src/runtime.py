@@ -2,6 +2,7 @@
 
 from collections import deque
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 from threading import Event, Lock, RLock, Thread
 from time import monotonic, perf_counter
@@ -32,12 +33,9 @@ from hailo_apps.python.core.gstreamer.gstreamer_helper_pipelines import (
     get_camera_resolution,
 )
 
-from tracking import (
-    UART_INVERT_X,
-    ClassAwareByteTracker,
-    TargetTelemetry,
-    TrackingResult,
-)
+from settings import AppSettings
+from tracking import ClassAwareByteTracker, TargetTelemetry, TrackingResult
+from uart import TargetUart
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NATIVE_PLUGIN_DIR = PROJECT_ROOT / "native" / "build"
@@ -54,18 +52,31 @@ class ModelInfo:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    settings: AppSettings
     model_path: str
-    labels_path: str
     source: str = "camera"
     video_path: str | None = None
-    width: int = 640
-    height: int = 480
-    frame_rate: int = 40
     display_threshold: float = 0.30
     exposure_us: int | None = None
     analogue_gain: float = 1.0
     terminal_log_every: int = 10
-    tracked_labels: tuple[str, ...] = ("CELL PHONE",)
+    uart_enabled: bool | None = None
+
+    @property
+    def width(self):
+        return self.settings.video.width
+
+    @property
+    def height(self):
+        return self.settings.video.height
+
+    @property
+    def frame_rate(self):
+        return self.settings.video.camera_fps if self.source == "camera" else 30
+
+    @property
+    def labels_path(self):
+        return str(self.settings.model.labels)
 
 
 @dataclass(frozen=True)
@@ -121,6 +132,7 @@ class VisionRuntime:
         self.config = None
         self.model_info = None
         self.tracker = None
+        self.uart = None
         self.pipeline = None
         self.video_sink = None
         self.bus = None
@@ -138,7 +150,7 @@ class VisionRuntime:
         self._lifecycle_lock = RLock()
 
     @staticmethod
-    def validate_model(path):
+    def validate_model(path, expected_classes=2):
         model_path = Path(path).expanduser().resolve()
         if model_path.suffix.lower() != ".hef" or not model_path.is_file():
             raise ValueError(f"Valid bir .hef dosyası seçin: {model_path}")
@@ -152,9 +164,10 @@ class VisionRuntime:
         if len(output_shape) != 3 or output_shape[1] != 5:
             raise ValueError(f"Çıkış Hailo NMS biçiminde değil: {output_shape}")
         classes = int(output_shape[0])
-        if classes != 80:
+        if classes != int(expected_classes):
             raise ValueError(
-                f"Telefon profili COCO-80 NMS modeli bekliyor; model={classes} sınıf"
+                f"DRONE/BIRD modeli {expected_classes} sınıflı olmalı; "
+                f"seçilen model={classes} sınıf"
             )
         return ModelInfo(
             path=str(model_path),
@@ -163,6 +176,20 @@ class VisionRuntime:
             output_shape=output_shape,
             classes=classes,
         )
+
+    @staticmethod
+    def validate_labels(path, expected_labels):
+        labels_path = Path(path).expanduser().resolve()
+        if not labels_path.is_file():
+            raise FileNotFoundError(f"Labels JSON bulunamadı: {labels_path}")
+        with labels_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        labels = tuple(str(label).upper() for label in payload.get("labels", []))
+        if labels != tuple(expected_labels):
+            raise ValueError(
+                f"Labels sırası {tuple(expected_labels)} olmalı; bulunan={labels}"
+            )
+        return labels_path
 
     def set_widget_handler(self, handler):
         self.widget_handler = handler
@@ -181,18 +208,42 @@ class VisionRuntime:
                 raise RuntimeError("Pipeline zaten çalışıyor")
             self.store.set_status("STARTING", "Model ve pipeline hazırlanıyor")
             self.config = config
-            self.model_info = self.validate_model(config.model_path)
-            labels_path = Path(config.labels_path).resolve()
-            if not labels_path.is_file():
-                raise FileNotFoundError(f"Labels JSON bulunamadı: {labels_path}")
+            settings = config.settings
+            self.model_info = self.validate_model(
+                config.model_path,
+                settings.model.expected_classes,
+            )
+            self.validate_labels(config.labels_path, settings.tracking.classes)
             if config.source == "video" and not Path(config.video_path or "").is_file():
                 raise FileNotFoundError(f"Video bulunamadı: {config.video_path}")
 
             self.tracker = ClassAwareByteTracker(
                 frame_rate=config.frame_rate,
+                low_threshold=settings.tracking.low_threshold,
+                high_threshold=settings.tracking.high_threshold,
+                new_track_threshold=settings.tracking.new_track_threshold,
                 display_threshold=config.display_threshold,
-                class_labels=config.tracked_labels,
+                match_threshold=settings.tracking.match_threshold,
+                track_buffer=settings.tracking.track_buffer,
+                min_confirmed_hits=settings.tracking.min_confirmed_hits,
+                display_match_iou=settings.tracking.display_match_iou,
+                lock_tolerance_px=settings.tracking.lock_tolerance_px,
+                class_labels=settings.tracking.classes,
+                priority_labels=settings.tracking.priority,
+                sticky_labels=settings.tracking.sticky_labels,
             )
+            uart_enabled = (
+                settings.uart.enabled
+                if config.uart_enabled is None
+                else config.uart_enabled
+            )
+            self.uart = TargetUart(
+                enabled=uart_enabled,
+                port=settings.uart.port,
+                baudrate=settings.uart.baudrate,
+                invert_x=settings.uart.invert_x,
+            )
+            self.uart.open()
             self.frame_index = 0
             self.frame_times.clear()
             with self._drop_lock:
@@ -280,6 +331,10 @@ class VisionRuntime:
         with self._lifecycle_lock:
             pipeline = self.pipeline
             if pipeline is None:
+                if self.uart is not None:
+                    self.uart.close()
+                    self.uart = None
+                self.tracker = None
                 self.store.reset(final_status, final_message)
                 return
             self.store.set_status("STOPPING", "Pipeline durduruluyor")
@@ -301,6 +356,9 @@ class VisionRuntime:
             self.video_widget = None
             self.pipeline = None
             self.tracker = None
+            if self.uart is not None:
+                self.uart.close()
+                self.uart = None
             self.store.reset(final_status, final_message)
 
     def _pipeline_string(self, config):
@@ -323,7 +381,7 @@ class VisionRuntime:
         if postprocess is None or not Path(postprocess).is_file():
             raise FileNotFoundError(f"Hailo post-process bulunamadı: {postprocess}")
         thresholds = (
-            "nms-score-threshold=0.10 "
+            f"nms-score-threshold={config.settings.tracking.low_threshold:.2f} "
             "nms-iou-threshold=0.45 "
             "output-format-type=HAILO_FORMAT_TYPE_FLOAT32"
         )
@@ -347,10 +405,12 @@ class VisionRuntime:
         # Mirror across the X axis before inference (top <-> bottom). Since
         # inference sees the mirrored pixels, boxes, the active-target line
         # and signed Y error all share the displayed coordinate system.
-        x_axis_mirror = (
-            " ! videoflip name=ui_x_axis_mirror "
-            "video-direction=vert qos=false"
-        )
+        x_axis_mirror = ""
+        if config.settings.video.mirror_x_axis:
+            x_axis_mirror = (
+                " ! videoflip name=ui_x_axis_mirror "
+                "video-direction=vert qos=false"
+            )
         # Never let stale frames queue up behind inference or presentation.
         # This is essential for pan/tilt control: a fresh frame is preferable
         # to displaying an old frame later.
@@ -360,7 +420,8 @@ class VisionRuntime:
             "identity name=identity_callback"
         )
         display = (
-            "bdtargetoverlay name=ui_aim_overlay ! "
+            "bdtargetoverlay name=ui_aim_overlay "
+            f"lock-tolerance={config.settings.tracking.lock_tolerance_px} ! "
             f"{QUEUE(name='ui_hailo_overlay_q', max_size_buffers=1, leaky=output_leaky)} ! "
             "hailooverlay name=target_overlay line-thickness=1 "
             "show-confidence=false qos=false ! "
@@ -385,6 +446,27 @@ class VisionRuntime:
         roi = hailo.get_roi_from_buffer(buffer)
         tracking = self.tracker.process(roi, width, height)
         self._add_overlay_objects(roi, width, height, tracking)
+
+        active = next(
+            (
+                target
+                for target in tracking.targets
+                if target.track_id == tracking.active_id
+            ),
+            None,
+        )
+        wire_x = 0
+        wire_y = 0
+        if self.uart is not None:
+            if active is None:
+                self.uart.send_no_target()
+            else:
+                wire_x, wire_y = self.uart.send_target(
+                    active.dx_px,
+                    active.dy_px,
+                    locked=tracking.state == "LOCKED",
+                )
+            self.uart.read_message()
 
         self.frame_index += 1
         now = monotonic()
@@ -414,24 +496,19 @@ class VisionRuntime:
             tracking.active_id is not None
             and self.frame_index % max(1, self.config.terminal_log_every) == 0
         ):
-            active = next(
-                target
-                for target in tracking.targets
-                if target.track_id == tracking.active_id
-            )
-            uart_dx_px = -active.dx_px if UART_INVERT_X else active.dx_px
-            uart_dx_norm = (
-                -active.dx_norm if UART_INVERT_X else active.dx_norm
-            )
+            half_width = width / 2.0
+            half_height = height / 2.0
+            uart_dx_norm = wire_x / half_width if half_width else 0.0
+            uart_dy_norm = wire_y / half_height if half_height else 0.0
             print(
                 f"HEDEF frame={self.frame_index} "
                 f"{active.label} ID={active.track_id} | "
                 f"GORUNTU_DX={active.dx_px:+.1f}px "
                 f"GORUNTU_DY={active.dy_px:+.1f}px | "
-                f"UART_HATA_X={uart_dx_px:+.1f}px "
-                f"UART_HATA_Y={active.dy_px:+.1f}px | "
+                f"UART_HATA_X={wire_x:+d}px "
+                f"UART_HATA_Y={wire_y:+d}px | "
                 f"UART_X_NORM={uart_dx_norm:+.4f} "
-                f"UART_Y_NORM={active.dy_norm:+.4f} | "
+                f"UART_Y_NORM={uart_dy_norm:+.4f} | "
                 f"TOPLAM_HATA={active.error_px:.1f}px",
                 flush=True,
             )
@@ -477,7 +554,7 @@ class VisionRuntime:
             # hundreds of fake detections or copying the frame into Python.
             roi.add_object(
                 hailo.HailoLandmarks(
-                    "cell_phone_aim",
+                    "active_target_aim",
                     [
                         hailo.HailoPoint(0.5, 0.5, 1.0),
                         hailo.HailoPoint(

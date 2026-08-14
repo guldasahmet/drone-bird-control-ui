@@ -1,8 +1,0 @@
-{
-  "detection_threshold": 0.10,
-  "max_boxes": 100,
-  "labels": [
-    "DRONE",
-    "BIRD"
-  ]
-}

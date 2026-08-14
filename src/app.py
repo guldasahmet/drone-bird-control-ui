@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GTK control station for COCO cell-phone detection and tracking."""
+"""DRONE/BIRD tespit, takip ve pan/tilt kontrol arayüzü."""
 
 import os
 from datetime import datetime
@@ -13,15 +13,11 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from runtime import RuntimeConfig, VisionRuntime
+from settings import load_settings
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
-DEFAULT_MODEL = Path("/usr/share/hailo-models/yolov8s_h8.hef")
-DEFAULT_LABELS = PROJECT_ROOT / "config" / "coco_labels.json"
-LIVE_WIDTH = 640
-LIVE_HEIGHT = 480
-CAMERA_FPS = 40
 
 
 def css_class(widget, name):
@@ -38,7 +34,8 @@ def label(text="", style=None, xalign=0.0):
 
 class ControlWindow(Gtk.Window):
     def __init__(self):
-        super().__init__(title="CELL PHONE TRACKING CONTROL")
+        self.settings = load_settings()
+        super().__init__(title="DRONE–BIRD TRACKING CONTROL")
         self.set_default_size(1600, 900)
         self.set_size_request(1080, 650)
         self.connect("delete-event", self._on_delete_event)
@@ -46,7 +43,7 @@ class ControlWindow(Gtk.Window):
         self.connect("key-press-event", self._on_key_press)
 
         self.runtime = VisionRuntime()
-        self.model_path = DEFAULT_MODEL
+        self.model_path = self.settings.model.path
         self.video_path = None
         self._fullscreen = False
         self._closing = False
@@ -87,9 +84,9 @@ class ControlWindow(Gtk.Window):
         box.set_border_width(14)
 
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title_box.pack_start(label("CELL PHONE TRACKING", "brand"), False, False, 0)
+        title_box.pack_start(label("DRONE–BIRD TRACKING", "brand"), False, False, 0)
         title_box.pack_start(
-            label("COCO-80 FILTERED VISION & PAN-TILT STATION", "subtitle"),
+            label("TWO-CLASS AERIAL TARGET TRACKING", "subtitle"),
             False,
             False,
             0,
@@ -112,7 +109,10 @@ class ControlWindow(Gtk.Window):
         self.video_overlay = Gtk.Overlay()
         video_card.add(self.video_overlay)
         self.video_host = Gtk.Box()
-        self.video_host.set_size_request(LIVE_WIDTH, LIVE_HEIGHT)
+        self.video_host.set_size_request(
+            self.settings.video.width,
+            self.settings.video.height,
+        )
         self.video_overlay.add(self.video_host)
 
         self.video_placeholder = label(
@@ -129,7 +129,12 @@ class ControlWindow(Gtk.Window):
     def _build_target_table(self):
         section = css_class(Gtk.Box(orientation=Gtk.Orientation.VERTICAL), "section")
         heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        heading.pack_start(label("DOĞRULANMIŞ TELEFONLAR", "section-title"), True, True, 0)
+        heading.pack_start(
+            label("DOĞRULANMIŞ HAVA HEDEFLERİ", "section-title"),
+            True,
+            True,
+            0,
+        )
         heading.pack_end(
             label("Satıra tıkla: aktif hedef seç", "hint", 1.0),
             False,
@@ -222,7 +227,8 @@ class ControlWindow(Gtk.Window):
         source_row.pack_end(self.video_button, False, False, 0)
         box.pack_start(source_row, False, False, 0)
         self.video_status = label(
-            f"{LIVE_WIDTH}×{LIVE_HEIGHT} @ {CAMERA_FPS} FPS",
+            f"{self.settings.video.width}×{self.settings.video.height} "
+            f"@ {self.settings.video.camera_fps} FPS",
             "hint",
         )
         self.video_status.set_ellipsize(3)
@@ -230,12 +236,16 @@ class ControlWindow(Gtk.Window):
 
         threshold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         threshold_row.pack_start(label("CONFIDENCE", "field-label"), True, True, 0)
-        self.threshold_value = label("0.30", "metric-cyan", 1.0)
+        self.threshold_value = label(
+            f"{self.settings.tracking.confidence:.2f}",
+            "metric-cyan",
+            1.0,
+        )
         threshold_row.pack_end(self.threshold_value, False, False, 0)
         box.pack_start(threshold_row, False, False, 2)
         adjustment = Gtk.Adjustment(
-            value=0.30,
-            lower=0.25,
+            value=self.settings.tracking.confidence,
+            lower=self.settings.tracking.high_threshold,
             upper=0.90,
             step_increment=0.01,
             page_increment=0.05,
@@ -308,7 +318,8 @@ class ControlWindow(Gtk.Window):
         self.direction.set_justify(Gtk.Justification.CENTER)
         box.pack_start(self.direction, False, False, 8)
         self.stm_note = label(
-            "STM çıkışı bu sürümde kapalıdır. Arayüz, bağlanacak denetleyici için dx/dy normalize telemetrisini hazır tutar.",
+            f"STM32: {self.settings.uart.port} @ {self.settings.uart.baudrate}. "
+            "Yalnız aktif hedefin signed piksel hatası gönderilir.",
             "hint",
         )
         self.stm_note.set_line_wrap(True)
@@ -350,12 +361,15 @@ class ControlWindow(Gtk.Window):
 
     def _validate_model(self, path):
         try:
-            info = self.runtime.validate_model(path)
+            info = self.runtime.validate_model(
+                path,
+                self.settings.model.expected_classes,
+            )
             self.model_path = Path(info.path)
             self.model_entry.set_text(str(self.model_path))
             shape = "×".join(str(value) for value in info.input_shape)
             self.model_status.set_text(
-                f"✓ COCO-80 • yalnız CELL PHONE • giriş {shape} • {info.network}"
+                f"✓ 2 SINIF • DRONE / BIRD • giriş {shape} • {info.network}"
             )
             self.model_status.get_style_context().add_class("valid")
             return True
@@ -366,7 +380,7 @@ class ControlWindow(Gtk.Window):
 
     def _choose_model(self, _button):
         dialog = Gtk.FileChooserDialog(
-            title="COCO-80 Hailo-8 HEF modelini seç",
+            title="2 sınıflı DRONE/BIRD Hailo-8 HEF modelini seç",
             parent=self,
             action=Gtk.FileChooserAction.OPEN,
         )
@@ -411,7 +425,8 @@ class ControlWindow(Gtk.Window):
             )
         else:
             self.video_status.set_text(
-                f"{LIVE_WIDTH}×{LIVE_HEIGHT} @ {CAMERA_FPS} FPS"
+                f"{self.settings.video.width}×{self.settings.video.height} "
+                f"@ {self.settings.video.camera_fps} FPS"
             )
 
     def _threshold_changed(self, scale):
@@ -427,14 +442,16 @@ class ControlWindow(Gtk.Window):
             self._show_error("Önce bir video dosyası seçin.")
             return
         config = RuntimeConfig(
+            settings=self.settings,
             model_path=str(self.model_path),
-            labels_path=str(DEFAULT_LABELS),
             source=source,
             video_path=str(self.video_path) if self.video_path else None,
-            width=LIVE_WIDTH,
-            height=LIVE_HEIGHT,
-            frame_rate=CAMERA_FPS if source == "camera" else 30,
             display_threshold=self.threshold_scale.get_value(),
+            uart_enabled=(
+                False
+                if os.environ.get("DRONE_BIRD_DISABLE_UART") == "1"
+                else None
+            ),
         )
         try:
             self.runtime.start(config)

@@ -12,7 +12,7 @@ fi
 cd "${HAILO_APPS_DIR}"
 source setup_env.sh >/dev/null
 set -u
-OVERLAY_SOURCE="${PROJECT_DIR}/native/bd_target_overlay.cpp"
+OVERLAY_SOURCE="${PROJECT_DIR}/native/target_overlay.cpp"
 OVERLAY_PLUGIN="${PROJECT_DIR}/native/build/libgstbdtargetoverlay.so"
 if [[ ! -f "${OVERLAY_PLUGIN}" || "${OVERLAY_SOURCE}" -nt "${OVERLAY_PLUGIN}" ]]; then
     "${PROJECT_DIR}/native/build.sh"
