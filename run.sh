@@ -19,4 +19,4 @@ if [[ ! -f "${OVERLAY_PLUGIN}" || "${OVERLAY_SOURCE}" -nt "${OVERLAY_PLUGIN}" ]]
 fi
 export GST_PLUGIN_PATH="${PROJECT_DIR}/native/build:${GST_PLUGIN_PATH:-}"
 export PYTHONPATH="${PROJECT_DIR}/src:${PYTHONPATH:-}"
-exec python "${PROJECT_DIR}/src/app.py" "$@"
+exec python "${PROJECT_DIR}/src/dual_app.py" "$@"

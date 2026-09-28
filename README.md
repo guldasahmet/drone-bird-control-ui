@@ -1,8 +1,42 @@
 # Drone–Bird Control UI
 
-Raspberry Pi 5, Hailo-8 ve Raspberry Pi Global Shutter Camera üzerinde iki
-sınıflı `DRONE`/`BIRD` tespiti, sınıf-bağımsız ByteTrack takibi ve pan/tilt
-hedef telemetrisi üreten GTK tabanlı kontrol arayüzüdür.
+## Güncel çift kamera arayüzü
+
+`./run.sh`, IMX296 Global Shutter ve IMX477 HQ kameralarını aynı süreçte,
+tek Hailo-8 üzerinde çalıştırır. Başlangıç kontrolü HQ'dadır; Global Shutter
+telefonu gördüğünde kontrol ona geçer ve beş kayıp kareden sonra HQ'ya döner.
+İki kamera bu sırada da sürekli görüntü üretir. GTK ekranı iki canlı görüntüyü,
+hedefleri, kamera devrini ve kamera/Hailo FPS değerlerini gösterir.
+
+İlk çalışma profili `/usr/share/hailo-models/yolov8s_h8.hef` ile yalnızca
+`cell phone` hedefidir. Hedef etiketi `config/phone_labels.json` içindedir.
+Depodaki iki sınıflı `models/yolo11s.hef` DRONE/BIRD modeli korunur; bu profil
+çift kamera arayüzüne henüz bağlanmadı.
+
+```bash
+cd /home/spikeedge/Desktop/hailo-workspace/drone-bird-control-ui
+./run.sh
+```
+
+`./run.sh` UART'ı açmaz. STM ile bilinçli deneme için `./run.sh --uart`
+kullanılır. STM hız yanıtı vermesine rağmen motor hareketi henüz
+doğrulanmadığından motor çalışması arayüz testiyle kanıtlanmış sayılmaz.
+İki kamera da 640×640 @30 FPS hedefiyle çalışır; gerçek FPS ekranda ölçülür.
+F11 tam ekranı açıp kapatır.
+
+Akış: `Picamera2 ×2 → appsrc (otomatik timestamp) → hailoroundrobin →
+hailonet → hailofilter → hailostreamrouter → iki GTK görüntüsü`. Kontrol
+kamerası değişirken görüntü kolları durdurulmaz. Kamera 0 için IMX296,
+kamera 1 için IMX477 doğrulanır; sıra değişmişse uygulama açık hata verir.
+
+`src/dual_app.py` güncel ekran, `src/dual_runtime.py` hedef ve devir mantığı,
+`src/dual_camera_pipeline.py` görüntü hattıdır. Eski tek kamera ekranı
+`src/app.py`, DRONE/BIRD ayarları `config/app.toml` ve modeli yerinde durur.
+
+## Eski tek kamera uygulamasının kayıtları
+
+Aşağıdaki bilgiler önceki DRONE/BIRD tek kamera uygulamasını anlatır;
+`./run.sh` artık yukarıdaki çift kamera ekranını açar.
 
 ## Donanım
 

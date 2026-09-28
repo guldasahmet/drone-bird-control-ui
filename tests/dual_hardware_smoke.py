@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Start the new GTK UI with UART off, sample both cameras, then close it."""
+
+import os
+from pathlib import Path
+import sys
+
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root / "src"))
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import GLib, Gtk
+
+from dual_app import DualControlWindow
+
+
+class Args:
+    uart = False
+    model = Path("/usr/share/hailo-models/yolov8s_h8.hef")
+
+
+def main():
+    window = DualControlWindow(Args())
+    window._show_error = lambda message: print(f"DUAL_UI_ERROR {message}", flush=True)
+    window.maximize()
+    window.show_all()
+
+    def start():
+        window._start(None)
+        return False
+
+    def finish():
+        sample = window.runtime.snapshot()
+        window.close()
+        print(
+            "DUAL_UI_SMOKE "
+            f"status={sample.status} message={sample.message!r} "
+            f"camera={sample.camera_fps} display={sample.display_fps} "
+            f"hailo={sample.infer_fps:.1f} uart={sample.uart_enabled}",
+            flush=True,
+        )
+        return False
+
+    GLib.timeout_add(500, start)
+    if os.environ.get("SMOKE_RESTART") == "1":
+        GLib.timeout_add_seconds(4, lambda: window._stop() or False)
+        GLib.timeout_add_seconds(5, start)
+    GLib.timeout_add_seconds(int(os.environ.get("SMOKE_SECONDS", "8")), finish)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()
