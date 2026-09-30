@@ -4,11 +4,29 @@ from types import SimpleNamespace
 
 import hailo
 
-from dual_runtime import DualVisionRuntime, HandoffController, target_pixel_errors
+from dual_runtime import (
+    DualVisionRuntime,
+    HandoffController,
+    add_overlay_objects,
+    target_pixel_errors,
+)
 from uart import TargetUart
 
 
 class HandoffTests(unittest.TestCase):
+    def test_active_phone_overlay_contains_boxes_and_aim(self):
+        roi = hailo.HailoROI(hailo.HailoBBox(0, 0, 1, 1))
+        phone = SimpleNamespace(
+            track_id=7,
+            x1=0.1, y1=0.2, x2=0.3, y2=0.4,
+            center_x=0.2, center_y=0.3, confidence=0.8,
+        )
+        add_overlay_objects(
+            roi, 640, 640, SimpleNamespace(targets=(phone,), active_id=7)
+        )
+        self.assertEqual(len(roi.get_objects_typed(hailo.HAILO_DETECTION)), 2)
+        self.assertEqual(len(roi.get_objects_typed(hailo.HAILO_LANDMARKS)), 1)
+
     def test_hq_to_gs_and_back_without_stopping_either_camera(self):
         controller = HandoffController(lost_frames=5, max_age_seconds=0.3)
         self.assertEqual(controller.snapshot(now=1.0)[0], 1)

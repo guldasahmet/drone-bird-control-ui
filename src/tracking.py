@@ -1,4 +1,4 @@
-"""DRONE/BIRD sınıfları için ByteTrack ve aktif hedef seçimi."""
+"""Telefon hedefleri için ByteTrack ve aktif hedef seçimi."""
 
 from dataclasses import dataclass
 from math import hypot
@@ -13,7 +13,7 @@ from hailo_apps.python.core.tracker.basetrack import BaseTrack
 from hailo_apps.python.core.tracker.byte_tracker import BYTETracker
 
 
-CLASS_LABELS = ("DRONE", "BIRD")
+CLASS_LABELS = ("CELL PHONE",)
 
 
 @dataclass(frozen=True)
@@ -44,22 +44,7 @@ class TrackingResult:
     raw_count: int
 
 
-def mirror_frame_x_axis(frame: np.ndarray) -> np.ndarray:
-    """Görüntüyü x eksenine göre aynalar (yukarı-aşağı çevirir).
-
-    Bu fonksiyon, görüntü Hailo modeline gönderilmeden önce çağrılmalıdır.
-    Sağ-sol ayna görüntüsü istenirse ``np.flip(frame, axis=1)`` kullanılmalıdır.
-    """
-
-    if frame is None or frame.ndim < 2:
-        raise ValueError("Aynalanacak geçerli bir görüntü karesi gerekli")
-
-    # ascontiguousarray, negatif stride nedeniyle GStreamer/OpenCV tarafında
-    # oluşabilecek uyumsuzlukları engeller.
-    return np.ascontiguousarray(np.flip(frame, axis=0))
-
-
-def _detection_box(detection, mirror_x_axis=False):
+def _detection_box(detection):
     bbox = detection.get_bbox()
 
     x1 = max(0.0, min(1.0, float(bbox.xmin())))
@@ -69,10 +54,6 @@ def _detection_box(detection, mirror_x_axis=False):
 
     if x2 <= x1 or y2 <= y1:
         return None
-
-    if mirror_x_axis:
-        # Görüntü yukarı-aşağı çevrildiğinde kutunun yeni Y sınırları.
-        y1, y2 = 1.0 - y2, 1.0 - y1
 
     return np.asarray([x1, y1, x2, y2], dtype=np.float64)
 
@@ -205,7 +186,7 @@ class ClassAwareByteTracker:
         lock_tolerance_px=25,
         class_labels=CLASS_LABELS,
         priority_labels=CLASS_LABELS,
-        sticky_labels=("DRONE",),
+        sticky_labels=("CELL PHONE",),
     ):
         self._lock = RLock()
 
@@ -274,28 +255,10 @@ class ClassAwareByteTracker:
             self.active_id = self.manual_id
             self.lock_started_at = None
 
-    def process(self, roi, width, height, frame=None):
-        """Bir Hailo ROI'sini işler ve doğrulanmış hedefleri döndürür.
-
-        ``frame`` verilirse görüntü x eksenine göre yerinde aynalanır. Bu
-        durumda algılama kutularının Y koordinatları da çevrilerek görüntüyle
-        aynı konumda tutulur. Hailo/GStreamer hattında görüntü zaten
-        ``videoflip method=vertical-flip`` ile çevriliyorsa ``frame``
-        verilmemelidir; aksi hâlde görüntü iki kez çevrilir.
-        """
+    def process(self, roi, width, height):
+        """Bir Hailo ROI'sini işler ve doğrulanmış hedefleri döndürür."""
 
         with self._lock:
-            mirror_boxes = frame is not None
-
-            if frame is not None:
-                mirrored_frame = mirror_frame_x_axis(frame)
-
-                if mirrored_frame.shape != frame.shape:
-                    raise ValueError("Aynalanan kare boyutu değişti")
-
-                # Çağıran taraftaki aynı NumPy dizisini günceller.
-                frame[...] = mirrored_frame
-
             raw_detections = list(
                 roi.get_objects_typed(hailo.HAILO_DETECTION)
             )
@@ -312,10 +275,7 @@ class ClassAwareByteTracker:
                     continue
 
                 confidence = float(detection.get_confidence())
-                box = _detection_box(
-                    detection,
-                    mirror_x_axis=mirror_boxes,
-                )
+                box = _detection_box(detection)
 
                 if box is None or confidence < self.low_threshold:
                     continue

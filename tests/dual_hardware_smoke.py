@@ -23,10 +23,17 @@ class Args:
 
 def main():
     window = DualControlWindow(Args())
-    window._show_error = lambda message: print(f"DUAL_UI_ERROR {message}", flush=True)
+    errors = []
+
+    def show_error(message):
+        errors.append(message)
+        print(f"DUAL_UI_ERROR {message}", flush=True)
+
+    window._show_error = show_error
     window.maximize()
     window.show_all()
     cycle_results = []
+    final_results = []
 
     def start():
         window._start(None)
@@ -34,6 +41,7 @@ def main():
 
     def finish():
         sample = window.runtime.snapshot()
+        final_results.append(sample)
         window.close()
         print(
             "DUAL_UI_SMOKE "
@@ -70,6 +78,8 @@ def main():
             GLib.timeout_add_seconds(5, start)
         GLib.timeout_add_seconds(int(os.environ.get("SMOKE_SECONDS", "8")), finish)
     Gtk.main()
+    if errors or not final_results or final_results[-1].status != "RUNNING":
+        raise SystemExit("Çift kamera başlatma testi başarısız")
     if cycles and (
         len(cycle_results) != cycles
         or any(sample.status != "RUNNING"

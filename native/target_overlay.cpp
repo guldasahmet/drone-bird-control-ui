@@ -1,4 +1,4 @@
-// Minimal in-place RGB aim overlay for the DRONE/BIRD tracking station.
+// Minimal in-place RGB aim overlay for the dual-camera tracking UI.
 // It consumes the private "active_target_aim" HailoLandmarks object, draws the
 // active-target vector, and removes that object before hailooverlay sees it.
 
@@ -192,7 +192,7 @@ static void gst_bd_target_overlay_class_init(GstBdTargetOverlayClass *klass)
 
     gst_element_class_set_static_metadata(
         element_class,
-        "DRONE/BIRD target overlay",
+        "Dual-camera target overlay",
         "Filter/Effect/Video",
         "Draws an in-place active-target vector on RGB frames",
         "Drone Bird Tracking Control UI");
@@ -230,7 +230,7 @@ GST_PLUGIN_DEFINE(
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     bdtargetoverlay,
-    "DRONE/BIRD in-place RGB target overlay",
+    "Dual-camera in-place RGB target overlay",
     plugin_init,
     "1.0.0",
     "LGPL",

@@ -1,244 +1,53 @@
-# Drone–Bird Control UI
+# Drone Bird Control UI
 
-## Güncel çift kamera arayüzü
+Raspberry Pi 5 ve tek Hailo-8 üzerinde iki CSI kamerayı aynı süreçte çalıştıran GTK arayüzü.
+Güncel arayüz telefonu (`cell phone`) izler. IMX477 HQ kamera başlangıçta kontrolü alır;
+IMX296 Global Shutter aynı telefonu iki ardışık doğrulanmış karede gördüğünde kontrol
+ona geçer. Global Shutter hedefi beş kare kaybederse kontrol HQ'ya döner. İki kamera
+görüntüsü de bu sırada açık kalır.
 
-`./run.sh`, IMX296 Global Shutter ve IMX477 HQ kameralarını aynı süreçte,
-tek Hailo-8 üzerinde çalıştırır. Başlangıç kontrolü HQ'dadır; Global Shutter
-telefonu iki ardışık doğrulanmış karede gördüğünde kontrol ona geçer ve beş
-kayıp kareden sonra HQ'ya döner.
-İki kamera bu sırada da sürekli görüntü üretir. GTK ekranı iki canlı görüntüyü,
-hedefleri, kamera devrini ve kamera/Hailo FPS değerlerini gösterir.
+## Güncel çalışma yolu
 
-İlk çalışma profili `/usr/share/hailo-models/yolov8s_h8.hef` ile yalnızca
-`cell phone` hedefidir. Hedef etiketi `config/phone_labels.json` içindedir.
-Depodaki iki sınıflı `models/yolo11s.hef` DRONE/BIRD modeli korunur; bu profil
-çift kamera arayüzüne henüz bağlanmadı.
+```text
+IMX296 + IMX477 → Picamera2 → appsrc → hailoroundrobin → hailonet
+  → hailofilter → hailostreamrouter → iki görüntü paneli
+```
+
+Telefon profili `/usr/share/hailo-models/yolov8s_h8.hef` modelini ve
+`config/phone_labels.json` hedef listesini kullanır. Her kamera için ayrı ByteTrack
+durumu tutulur. Varsayılan görüntü çıkışı TigerVNC ile uyumlu `appsink → GTK`
+yoludur. Kamera 0 IMX296, kamera 1 IMX477 olmalıdır; uygulama bu eşleşmeyi açılışta
+kontrol eder. Çözünürlük 640×640, hedef kare hızı kamera başına 30 FPS'tir.
 
 ```bash
 cd /home/spikeedge/Desktop/hailo-workspace/drone-bird-control-ui
 ./run.sh
 ```
 
-`./run.sh` UART'ı açmaz. STM ile deneme için `./run.sh --uart` kullanılır.
-Çift kamera telefon profilinde STM'ye giden X ve Y hata işaretleri, çalışan
-`drone-bird-control` ile aynı biçimde ters çevrilir. Arayüzdeki hedef hatası
-görüntü koordinatı, terminaldeki `STM hata` gönderilecek koordinattır.
-İki kamera da 640×640 @30 FPS hedefiyle çalışır; gerçek FPS ekranda ölçülür.
-F11 tam ekranı açıp kapatır.
+`run.sh`, yanındaki `hailo-apps/setup_env.sh` ortamını yükler ve hedef çizgisi için
+`native/` eklentisini gerektiğinde derler. UART varsayılan olarak kapalıdır;
+`./run.sh --uart` ile açılır. Telefon profilinde görüntü merkezine göre hesaplanan
+X ve Y hatalarının işaretleri STM'ye gönderilirken ters çevrilir. Paket 5 bayttır:
+`<Bhh`; `0xFF` takip, `0xFE` kilit anlamına gelir. Hedef yoksa `0xFF, 0, 0`
+gönderilir.
 
-Arayüz görüntüsü varsayılan olarak `appsink → GTK` üzerinden çizilir; bu yol
-TigerVNC'de siyah kalan Wayland video yüzeyini kullanmaz. Eski görüntü yolunu
-karşılaştırmak için `./run.sh --display-backend wayland` kullanılabilir.
-Bu seçenek yalnızca görüntünün çizildiği son aşamayı değiştirir. Terminalde
-her kamera için `kamera` (yakalanan kare), `hat` (Hailo sonrası kare),
-`pencere` (GTK tarafından çizilen kare) FPS değerleri ile kamera ve görüntü
-sink'i örnek karelerinin `parlaklık` değerleri yazılır. Arayüz ilk görüntüyü
-almadan çalışıyor durumuna geçmez; görüntü gelmezse sekiz saniye içinde tanı
-bilgisiyle hata verir.
+Arayüz F11 ile tam ekran olur. Görüntü sorunu tanısı için
+`./run.sh --display-backend wayland` eski görüntü çıkışını seçer. Terminalde kamera,
+Hailo sonrası hat ve ekrana çizilen kare hızları yazılır.
 
-Akış: `Picamera2 ×2 → appsrc (otomatik timestamp) → hailoroundrobin →
-hailonet → hailofilter → hailostreamrouter → iki GTK görüntüsü`. Kontrol
-kamerası değişirken görüntü kolları durdurulmaz. Kamera 0 için IMX296,
-kamera 1 için IMX477 doğrulanır; sıra değişmişse uygulama açık hata verir.
-
-`src/dual_app.py` güncel ekran, `src/dual_runtime.py` hedef ve devir mantığı,
-`src/dual_camera_pipeline.py` görüntü hattıdır. Eski tek kamera ekranı
-`src/app.py`, DRONE/BIRD ayarları `config/app.toml` ve modeli yerinde durur.
-
-## Eski tek kamera uygulamasının kayıtları
-
-Aşağıdaki bilgiler önceki DRONE/BIRD tek kamera uygulamasını anlatır;
-`./run.sh` artık yukarıdaki çift kamera ekranını açar.
-
-## Donanım
-
-- Raspberry Pi 5 8 GB
-- Hailo-8 26 TOPS
-- Raspberry Pi Global Shutter Camera (IMX296)
-- 16 mm lens
-- İsteğe bağlı STM32 pan/tilt denetleyicisi
-
-## Temel özellikler
-
-- Projeye dahil iki sınıflı `yolo11s.hef` modeli
-- DRONE ve BIRD için ayrı ByteTrack durum makineleri
-- DRONE öncelikli aktif hedef seçimi
-- Görünür aktif DRONE ID'sini koruma
-- Tüm doğrulanmış hedeflerde kırmızı kutu
-- Yalnız aktif hedefte kırmızı merkez çizgisi
-- Piksel ve normalize X/Y hedef hatası
-- Config ile ayarlanan merkez kilit toleransı
-- Confidence değerini arayüzden değiştirme
-- `640×480 @ 40 FPS` canlı kamera hattı
-- Canlı kamera ve video dosyası desteği
-- STM32 için 5 baytlık signed hedef paketi
-- Düşük gecikmeli GStreamer kuyrukları ve native Wayland görüntüleme
-
-## Sistem akışı
+## Dosyalar
 
 ```text
-IMX296 / video dosyası
-        │
-        ▼
-GStreamer RGB pipeline
-        │
-        ▼
-Hailo-8 YOLO11s inference
-        │
-        ▼
-DRONE / BIRD sınıf filtresi
-        │
-        ├── DRONE ByteTrack
-        └── BIRD ByteTrack
-                 │
-                 ▼
-Aktif hedef politikası → overlay / arayüz / UART
+config/phone_labels.json     Telefon hedef filtresi
+native/                      Çift kamera hedef çizgisi eklentisi
+src/dual_app.py              GTK ekranı
+src/dual_camera_pipeline.py  Çift kamera ve Hailo akışı
+src/dual_runtime.py          Telefon takibi, kamera devri, UART
+src/tracking.py              İki kameranın kullandığı ByteTrack kodu
+src/uart.py                  STM paket kodu
+tests/                       Çift kamera birim ve donanım testleri
+run.sh                       Çalıştırma betiği
 ```
-
-Arayüz thread'i video karesi taşımaz. Kamera, inference, metadata takibi,
-native overlay ve Wayland sunumu ayrı GStreamer aşamalarında çalışır. Sınırlı
-ve leaky kuyruklar eski karelerin birikerek pan/tilt gecikmesi oluşturmasını
-önler.
-
-## Model
-
-Model proje içinde bulunur:
-
-```text
-models/yolo11s.hef
-```
-
-Doğrulanan model özellikleri:
-
-- Hailo-8 mimarisi
-- `640×640×3` giriş
-- İki sınıflı Hailo NMS çıkışı
-- Sınıf sırası: `DRONE`, `BIRD`
-
-Sınıf isimleri `config/labels.json` içinde tanımlıdır. Uygulama başlangıçta
-HEF sınıf sayısı ile labels sırasının uyumunu doğrular.
-
-## Aktif hedef politikası
-
-Hedef seçimi aşağıdaki sırayla yapılır:
-
-1. Kullanıcının tablodan elle seçtiği görünür hedef
-2. Görünür durumdaki mevcut aktif DRONE ID'si
-3. Merkeze en yakın DRONE
-4. DRONE yoksa merkeze en yakın BIRD
-
-Bütün doğrulanmış hedefler görüntülenir; kırmızı çizgi, hata telemetrisi,
-kilit durumu ve UART yalnız aktif hedef için üretilir. Güncel karede görülmeyen
-nesneye tahmini kutu çizilmez.
-
-## Hata hesabı
-
-`640×480` görüntünün merkezi `(320, 240)` pikseldir:
-
-```text
-hata_x = hedef_merkez_x - 320
-hata_y = hedef_merkez_y - 240
-
-hata_x_norm = hata_x / 320
-hata_y_norm = hata_y / 240
-```
-
-Görüntü koordinatında sağ ve aşağı pozitiftir. STM32'ye gönderilen X işareti
-`config/app.toml` içindeki `invert_x` ayarıyla pan mekanizmasına uyarlanır.
-
-## UART protokolü
-
-Paket little-endian 5 bayttır:
-
-```text
-<Bhh
-```
-
-| Alan | Tür | Açıklama |
-|---|---|---|
-| Header | `uint8` | `0xFF`: takip, `0xFE`: kilit |
-| hata_x | `int16` | Pan ekseni hatası |
-| hata_y | `int16` | Tilt ekseni hatası |
-
-Hedef bulunmadığında `0xFF, 0, 0` gönderilir. UART kullanmadan güvenli test
-için `DRONE_BIRD_DISABLE_UART=1` kullanılabilir.
-
-## Yapılandırma
-
-Bütün çalışma ayarları `config/app.toml` dosyasındadır:
-
-```toml
-[model]
-path = "models/yolo11s.hef"
-labels = "config/labels.json"
-expected_classes = 2
-
-[video]
-width = 640
-height = 480
-camera_fps = 40
-mirror_x_axis = true
-
-[tracking]
-classes = ["DRONE", "BIRD"]
-priority = ["DRONE", "BIRD"]
-confidence = 0.30
-lock_tolerance_px = 25
-
-[uart]
-enabled = true
-port = "/dev/ttyACM0"
-baudrate = 115200
-invert_x = true
-```
-
-## Proje yapısı
-
-```text
-drone-bird-control-ui/
-├── models/       # İki sınıflı HEF modeli
-├── config/       # TOML ayarları ve labels
-├── src/          # GTK, runtime, tracking, UART ve ayar kodu
-├── native/       # Native GStreamer overlay
-├── tests/        # Core ve donanım smoke testleri
-├── run.sh
-├── run-headless.sh # İki kamera, arayüzsüz veya yan yana görüntü
-└── README.md
-```
-
-## Çalıştırma
-
-Hailo Apps çalışma alanı projenin yanında bulunmalıdır:
-
-```text
-hailo-workspace/
-├── hailo-apps/
-└── drone-bird-control-ui/
-```
-
-Uygulamayı başlatmak için:
-
-```bash
-cd /home/spikeedge/Desktop/hailo-workspace/drone-bird-control-ui
-./run.sh
-```
-
-`run.sh`, Hailo ortamını yükler, Python yolunu ayarlar ve native overlay'i
-gerektiğinde otomatik olarak derler.
-
-### Çift kamera tespiti
-
-`run-headless.sh`, iki kamerayı aynı Hailo-8 inference hattında çalıştırır.
-Her kamera için ayrı ByteTrack durumu tutulur. Bu kipte UART kapalıdır ve
-kameralar arasında hedef devri yapılmaz.
-
-```bash
-./run-headless.sh --fps 30
-```
-
-İki kamerayı tespit kutularıyla yan yana görmek için `--display` ekleyin.
-Kamera indeksleri `--camera0` ve `--camera1` ile değiştirilebilir; fiziksel
-kameralarla eşleşmelerini cihaz üzerinde doğrulayın.
 
 ## Test
 
@@ -246,18 +55,16 @@ kameralarla eşleşmelerini cihaz üzerinde doğrulayın.
 cd /home/spikeedge/Desktop/hailo-workspace/hailo-apps
 source setup_env.sh
 cd ../drone-bird-control-ui
-PYTHONPATH="$PWD/src:$PYTHONPATH" python -m unittest discover -s tests -v
+PYTHONPATH="$PWD/src:$PYTHONPATH" python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-UART kapalı kamera smoke testi:
-
-```bash
-DRONE_BIRD_DISABLE_UART=1 SMOKE_SECONDS=8 \
-PYTHONPATH="$PWD/src:$PYTHONPATH" python tests/hardware_smoke.py
-```
-
-Native overlay'i elle derlemek için:
+UART kapalı kısa donanım testi:
 
 ```bash
 ./native/build.sh
+GST_PLUGIN_PATH="$PWD/native/build:${GST_PLUGIN_PATH:-}" \
+SMOKE_SECONDS=8 PYTHONPATH="$PWD/src:$PYTHONPATH" \
+python tests/dual_hardware_smoke.py
 ```
+
+`videos/`, loglar ve derleme çıktıları Git'e eklenmez.

@@ -10,7 +10,6 @@ import hailo
 from hailo_platform import HEF
 
 from dual_camera_pipeline import DualCameraPipeline, HEIGHT, WIDTH
-from runtime import VisionRuntime
 from tracking import ClassAwareByteTracker
 from uart import TargetUart
 
@@ -29,6 +28,51 @@ def target_pixel_errors(target):
         int(target.center_x * WIDTH) - WIDTH // 2,
         int(target.center_y * HEIGHT) - HEIGHT // 2,
     )
+
+
+def add_overlay_objects(roi, width, height, tracking):
+    """Keep target boxes and the active target vector with their Hailo frame."""
+    red_index = 0
+    active = None
+    for target in tracking.targets:
+        bbox = hailo.HailoBBox(
+            target.x1,
+            target.y1,
+            target.x2 - target.x1,
+            target.y2 - target.y1,
+        )
+        roi.add_object(
+            hailo.HailoDetection(bbox, red_index, "", target.confidence)
+        )
+        if target.track_id == tracking.active_id:
+            active = target
+            pad_x = 1.0 / width
+            pad_y = 1.0 / height
+            x1 = max(0.0, target.x1 - pad_x)
+            y1 = max(0.0, target.y1 - pad_y)
+            x2 = min(1.0, target.x2 + pad_x)
+            y2 = min(1.0, target.y2 + pad_y)
+            roi.add_object(
+                hailo.HailoDetection(
+                    hailo.HailoBBox(x1, y1, x2 - x1, y2 - y1),
+                    red_index, "", target.confidence,
+                )
+            )
+
+    if active is not None:
+        roi.add_object(
+            hailo.HailoLandmarks(
+                "active_target_aim",
+                [
+                    hailo.HailoPoint(0.5, 0.5, 1.0),
+                    hailo.HailoPoint(
+                        active.center_x, active.center_y, active.confidence
+                    ),
+                ],
+                0.0,
+                [(0, 1)],
+            )
+        )
 
 
 class HandoffController:
@@ -183,7 +227,7 @@ class DualVisionRuntime:
     def _detect(self, slot, buffer):
         roi = hailo.get_roi_from_buffer(buffer)
         result = self.trackers[slot].process(roi, WIDTH, HEIGHT)
-        VisionRuntime._add_overlay_objects(roi, WIDTH, HEIGHT, result)
+        add_overlay_objects(roi, WIDTH, HEIGHT, result)
         active = next(
             (item for item in result.targets if item.track_id == result.active_id),
             None,
