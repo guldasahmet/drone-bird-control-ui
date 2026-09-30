@@ -18,14 +18,14 @@ from dual_app import DualControlWindow
 
 class Args:
     uart = False
-    model = Path("/usr/share/hailo-models/yolov8s_h8.hef")
+    config = Path(os.environ.get("SMOKE_CONFIG", project_root / "config.json"))
 
 
 def main():
     window = DualControlWindow(Args())
     errors = []
 
-    def show_error(message):
+    def show_error(message, _title=None):
         errors.append(message)
         print(f"DUAL_UI_ERROR {message}", flush=True)
 
@@ -34,12 +34,30 @@ def main():
     window.show_all()
     cycle_results = []
     final_results = []
+    recording_results = []
 
     def start():
         window._start(None)
         return False
 
     def finish():
+        if os.environ.get("SMOKE_DIAG") == "1" and window.runtime.pipeline:
+            pipeline = window.runtime.pipeline
+            print(
+                "DISPLAY_DIAG "
+                f"generated={pipeline.frame_generation} "
+                f"drawn={pipeline.drawn_generation} "
+                f"pending={pipeline.pending_updates} "
+                f"window_mapped={window.get_mapped()} "
+                f"widgets_mapped={[widget.get_mapped() for widget in pipeline.video_widgets]} ",
+                flush=True,
+            )
+            for slot, pixbuf in enumerate(pipeline.pixbufs):
+                if pixbuf is not None:
+                    pixbuf.savev(f"/tmp/drone-ui-smoke-cam{slot}.png", "png", [], [])
+        if os.environ.get("SMOKE_RECORD") == "1":
+            window.runtime.stop_recording()
+            recording_results.append(window.runtime.recording_status())
         sample = window.runtime.snapshot()
         final_results.append(sample)
         window.close()
@@ -50,6 +68,18 @@ def main():
             f"hailo={sample.infer_fps:.1f} uart={sample.uart_enabled}",
             flush=True,
         )
+        if recording_results:
+            recording = recording_results[-1]
+            print(
+                f"DATASET_SMOKE saved={recording.saved} "
+                f"dropped={recording.dropped} error={recording.error!r} "
+                f"directory={recording.directory}",
+                flush=True,
+            )
+        return False
+
+    def start_recording():
+        window._toggle_recording(None)
         return False
 
     def sample_and_stop(cycle):
@@ -73,6 +103,8 @@ def main():
         GLib.timeout_add(5000 * cycles + 500, finish)
     else:
         GLib.timeout_add(500, start)
+        if os.environ.get("SMOKE_RECORD") == "1":
+            GLib.timeout_add(3000, start_recording)
         if os.environ.get("SMOKE_RESTART") == "1":
             GLib.timeout_add_seconds(4, lambda: window._stop() or False)
             GLib.timeout_add_seconds(5, start)
@@ -80,6 +112,13 @@ def main():
     Gtk.main()
     if errors or not final_results or final_results[-1].status != "RUNNING":
         raise SystemExit("Çift kamera başlatma testi başarısız")
+    if os.environ.get("SMOKE_RECORD") == "1" and (
+        not recording_results
+        or recording_results[-1] is None
+        or recording_results[-1].error
+        or min(recording_results[-1].saved) < 2
+    ):
+        raise SystemExit("Dataset kayıt testi başarısız")
     if cycles and (
         len(cycle_results) != cycles
         or any(sample.status != "RUNNING"

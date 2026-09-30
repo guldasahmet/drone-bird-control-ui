@@ -20,6 +20,8 @@ native/build/
 
 # Local models, recordings and runtime output
 *.hef
+!models/phone.hef
+!models/yolo11s.hef
 *.mp4
 *.webm
 *.avi
@@ -27,7 +29,7 @@ native/build/
 *.log
 logs/
 captures/
-videos/
+dataset/
 
 # Editor and OS files
 .idea/

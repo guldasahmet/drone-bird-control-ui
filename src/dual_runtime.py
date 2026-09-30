@@ -1,8 +1,6 @@
-"""Two live cameras, one Hailo, independent phone tracks and HQ/GS control."""
+"""Two live cameras, one Hailo, independent target tracks and HQ/GS control."""
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
 
@@ -10,23 +8,20 @@ import hailo
 from hailo_platform import HEF
 
 from dual_camera_pipeline import DualCameraPipeline, HEIGHT, WIDTH
+from model_profile import load_active_profile
 from tracking import ClassAwareByteTracker
 from uart import TargetUart
 
 
-DEFAULT_HEF = Path("/usr/share/hailo-models/yolov8s_h8.hef")
-DEFAULT_POSTPROCESS = Path(
-    "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"
-)
-PHONE_LABELS = Path(__file__).resolve().parents[1] / "config" / "phone_labels.json"
 CAMERA_NAMES = ("GLOBAL SHUTTER", "HQ")
 
 
-def target_pixel_errors(target):
-    """Use the same pixel-center rounding as drone-bird-control and denme."""
+def target_pixel_errors(target, *, flip_vertical=False):
+    """Recover camera-native coordinates before reference UART rounding."""
+    camera_y = 1.0 - target.center_y if flip_vertical else target.center_y
     return (
         int(target.center_x * WIDTH) - WIDTH // 2,
-        int(target.center_y * HEIGHT) - HEIGHT // 2,
+        int(camera_y * HEIGHT) - HEIGHT // 2,
     )
 
 
@@ -157,17 +152,17 @@ class DualSnapshot:
 
 
 class DualVisionRuntime:
-    def __init__(self, widget_handler, *, model_path=DEFAULT_HEF,
-                 postprocess_path=DEFAULT_POSTPROCESS, fps=30,
-                 confidence=0.15, uart_enabled=False,
+    def __init__(self, widget_handler, *, profile=None, fps=30,
+                 uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=50,
                  display_backend="gtk"):
         self.widget_handler = widget_handler
-        self.model_path = Path(model_path)
-        self.postprocess_path = Path(postprocess_path)
+        self.profile = profile or load_active_profile()
+        self.model_path = self.profile.hef
+        self.postprocess_path = self.profile.postprocess_so
         self.fps = fps
-        self.confidence = confidence
+        self.confidence = self.profile.confidence
         self.uart_enabled = uart_enabled
         self.uart_port = uart_port
         self.baudrate = baudrate
@@ -175,11 +170,8 @@ class DualVisionRuntime:
         self.invert_y = invert_y
         self.lock_tolerance = lock_tolerance
         self.display_backend = display_backend
-        with PHONE_LABELS.open(encoding="utf-8") as handle:
-            labels = json.load(handle).get("target_labels", [])
-        self.target_labels = {str(label).strip().casefold() for label in labels}
-        if self.target_labels != {"cell phone"}:
-            raise ValueError("phone_labels.json hedefi cell phone olmalı")
+        self.target_ids = frozenset(self.profile.labels_by_id)
+        self.target_labels = {label.casefold() for label in self.profile.target_names}
         self.pipeline = None
         self.uart = None
         self.output_stop = Event()
@@ -193,23 +185,27 @@ class DualVisionRuntime:
         self.message = "Hazır"
         self.transition = ""
         self.started_at = 0.0
+        self.last_recording_status = None
 
     def _new_tracker(self):
         return ClassAwareByteTracker(
             frame_rate=self.fps,
-            class_labels=("CELL PHONE",),
-            priority_labels=("CELL PHONE",),
-            sticky_labels=("CELL PHONE",),
-            low_threshold=0.10,
-            high_threshold=0.15,
-            new_track_threshold=0.15,
+            class_labels=self.profile.target_names,
+            priority_labels=self.profile.priority,
+            sticky_labels=self.profile.sticky,
+            labels_by_id=(self.profile.labels_by_id
+                          if self.profile.match_by == "id" else None),
+            low_threshold=self.profile.low_threshold,
+            high_threshold=self.profile.high_threshold,
+            new_track_threshold=self.profile.new_track_threshold,
             display_threshold=self.confidence,
             min_confirmed_hits=2,
             lock_tolerance_px=self.lock_tolerance,
         )
 
     def set_confidence(self, value):
-        self.confidence = max(0.15, min(0.90, float(value)))
+        self.confidence = max(self.profile.high_threshold,
+                              min(0.90, float(value)))
         for tracker in self.trackers:
             tracker.set_display_threshold(self.confidence)
 
@@ -220,8 +216,12 @@ class DualVisionRuntime:
     def _filter(self, buffer):
         roi = hailo.get_roi_from_buffer(buffer)
         for detection in list(roi.get_objects_typed(hailo.HAILO_DETECTION)):
-            if (detection.get_label().strip().casefold() not in self.target_labels
-                    or detection.get_confidence() < self.confidence):
+            accepted = (
+                detection.get_label().strip().casefold() in self.target_labels
+                if self.profile.match_by == "label"
+                else detection.get_class_id() in self.target_ids
+            )
+            if not accepted or detection.get_confidence() < self.confidence:
                 roi.remove_object(detection)
 
     def _detect(self, slot, buffer):
@@ -246,7 +246,9 @@ class DualVisionRuntime:
                 if target is None:
                     self.uart.send_no_target()
                 else:
-                    error_x, error_y = target_pixel_errors(target)
+                    error_x, error_y = target_pixel_errors(
+                        target, flip_vertical=self.profile.camera_flip_vertical
+                    )
                     locked = (abs(error_x) <= self.lock_tolerance
                               and abs(error_y) <= self.lock_tolerance)
                     self.uart.send_target(error_x, error_y, locked=locked)
@@ -268,12 +270,10 @@ class DualVisionRuntime:
         self.metrics = ((0.0, 0.0), 0.0, (0.0, 0.0))
         self.transition = ""
         self.started_at = monotonic()
+        self.last_recording_status = None
         self.output_stop.clear()
         try:
-            hef = HEF(str(self.model_path.expanduser().resolve()))
-            outputs = hef.get_output_vstream_infos()
-            if len(outputs) != 1 or int(outputs[0].shape[0]) != 80:
-                raise ValueError("Telefon profili 80 sınıflı COCO HEF gerektirir")
+            self.profile.validate_hef(HEF)
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,
                 invert_x=self.invert_x,
@@ -284,6 +284,13 @@ class DualVisionRuntime:
                 fps=self.fps,
                 hef_path=self.model_path,
                 post_so=self.postprocess_path,
+                post_function=self.profile.postprocess_function,
+                post_config_data=(self.profile.postprocess.as_dict()
+                                  if self.profile.postprocess else None),
+                profile_name=self.profile.name,
+                nms_score_threshold=self.profile.nms_score_threshold,
+                nms_iou_threshold=self.profile.nms_iou_threshold,
+                flip_vertical=self.profile.camera_flip_vertical,
                 on_filter=self._filter,
                 on_detection=self._detect,
                 widget_handler=self.widget_handler,
@@ -331,6 +338,8 @@ class DualVisionRuntime:
         levels, sink_levels, branches = self.pipeline.frame_diagnostics()
         for slot in (0, 1):
             item, seen_at = latest[slot]
+            result = self.results[slot]
+            candidate_count = result.raw_count if result is not None else 0
             target_text = (
                 "hedef yok" if item is None or monotonic() - seen_at > 0.3
                 else f"{item.label} %{item.confidence * 100:.0f} "
@@ -344,7 +353,7 @@ class DualVisionRuntime:
                 f"parlaklık={levels[slot]:.1f}"
                 + (f"→{sink_levels[slot]:.1f}" if self.display_backend == "gtk"
                    else "")
-                + f" | {target_text}",
+                + f" | aday={candidate_count} | {target_text}",
                 flush=True,
             )
         control_text = (
@@ -355,7 +364,9 @@ class DualVisionRuntime:
         if self.uart_enabled and self.uart is not None:
             wire_x, wire_y = (
                 (0, 0) if target is None
-                else self.uart.wire_errors(*target_pixel_errors(target))
+                else self.uart.wire_errors(*target_pixel_errors(
+                    target, flip_vertical=self.profile.camera_flip_vertical
+                ))
             )
             wire_text = f" | STM hata=({wire_x:+d},{wire_y:+d})"
         print(
@@ -379,6 +390,20 @@ class DualVisionRuntime:
                 tuple(self.pipeline.branch_fps) if self.pipeline else (0.0, 0.0),
             )
 
+    def start_recording(self):
+        if self.pipeline is None or self.status != "RUNNING":
+            raise RuntimeError("Dataset kaydı için önce iki kamerayı başlatın")
+        return self.pipeline.start_recording()
+
+    def stop_recording(self):
+        if self.pipeline is not None:
+            self.pipeline.stop_recording()
+
+    def recording_status(self):
+        if self.pipeline is not None:
+            return self.pipeline.recording_status()
+        return self.last_recording_status
+
     def stop(self):
         self.output_stop.set()
         if self.output_thread and self.output_thread.is_alive():
@@ -391,6 +416,7 @@ class DualVisionRuntime:
             self.uart = None
         if self.pipeline is not None:
             self.pipeline.stop()
+            self.last_recording_status = self.pipeline.recording_status()
             self.pipeline = None
         self.status = "STOPPED"
         self.message = "Hazır"

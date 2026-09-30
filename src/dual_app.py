@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GTK view for the proven two-camera, one-Hailo phone baseline."""
+"""GTK view for the two-camera, one-Hailo tracking pipeline."""
 
 import argparse
 from datetime import datetime
@@ -12,7 +12,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from dual_runtime import CAMERA_NAMES, DEFAULT_HEF, DualVisionRuntime
+from dual_runtime import CAMERA_NAMES, DualVisionRuntime
+from model_profile import DEFAULT_CONFIG, load_active_profile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +46,10 @@ class DualControlWindow(Gtk.Window):
         self._closing = False
         self._fullscreen = False
         self._table_signature = None
+        self.profile = load_active_profile(getattr(args, "config", DEFAULT_CONFIG))
         self.runtime = DualVisionRuntime(
             self._mount_widget,
-            model_path=args.model,
+            profile=self.profile,
             uart_enabled=args.uart,
             display_backend=getattr(args, "display_backend", "gtk"),
         )
@@ -73,7 +75,9 @@ class DualControlWindow(Gtk.Window):
         top.set_border_width(14)
         brand = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         brand.pack_start(label("DRONE–BIRD CONTROL", "brand"), False, False, 0)
-        brand.pack_start(label("İKİ KAMERA • TEK HAILO • TELEFON HEDEFİ", "subtitle"),
+        brand.pack_start(label(
+            f"İKİ KAMERA • TEK HAILO • {self.profile.display_name.upper()} HEDEFİ",
+            "subtitle"),
                          False, False, 0)
         top.pack_start(brand, True, True, 0)
         self.header_status = label("● HAZIR", "status-ready")
@@ -110,11 +114,14 @@ class DualControlWindow(Gtk.Window):
             self.video_hosts.append(host)
             self.video_placeholders.append(placeholder)
 
-        frame, box = panel("TELEFON HEDEFLERİ · AKTİF KAMERADAKİ HEDEF SEÇİLEBİLİR")
-        self.target_store = Gtk.ListStore(int, int, str, str, str, str, str)
+        frame, box = panel(
+            f"{self.profile.display_name.upper()} HEDEFLERİ · "
+            "AKTİF KAMERADAKİ HEDEF SEÇİLEBİLİR"
+        )
+        self.target_store = Gtk.ListStore(int, int, str, str, str, str, str, str)
         view = Gtk.TreeView(model=self.target_store)
-        for title, column in (("KAMERA", 2), ("ID", 3), ("GÜVEN", 4),
-                              ("dx px", 5), ("dy px", 6)):
+        for title, column in (("KAMERA", 2), ("ID", 3), ("SINIF", 4),
+                              ("GÜVEN", 5), ("dx px", 6), ("dy px", 7)):
             cell = Gtk.CellRendererText()
             view.append_column(Gtk.TreeViewColumn(title, cell, text=column))
         view.get_selection().connect("changed", self._select_target)
@@ -129,17 +136,23 @@ class DualControlWindow(Gtk.Window):
         body.pack_end(sidebar, False, False, 0)
 
         frame, box = panel("ÇALIŞTIRMA")
-        model = label(f"MODEL: {self.runtime.model_path.name}", "hint")
+        model = label(
+            f"PROFİL: {self.profile.display_name} ({self.profile.name})\n"
+            f"MODEL: {self.runtime.model_path.name}", "hint"
+        )
         model.set_line_wrap(True)
         box.pack_start(model, False, False, 0)
-        box.pack_start(label("640×640 · 30 + 30 FPS · CELL PHONE", "hint"),
+        box.pack_start(label(
+            f"640×640 · 30 + 30 FPS · {', '.join(self.profile.target_names)}",
+            "hint"),
                        False, False, 0)
         box.pack_start(label("CONFIDENCE", "field-label"), False, False, 0)
-        self.threshold_text = label("0.15", "metric-cyan")
+        self.threshold_text = label(f"{self.profile.confidence:.2f}", "metric-cyan")
         box.pack_start(self.threshold_text, False, False, 0)
         self.threshold = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
-                                                  0.15, 0.90, 0.01)
-        self.threshold.set_value(0.15)
+                                                  self.profile.high_threshold,
+                                                  0.90, 0.01)
+        self.threshold.set_value(self.profile.confidence)
         self.threshold.set_draw_value(False)
         self.threshold.connect("value-changed", self._change_threshold)
         box.pack_start(self.threshold, False, False, 0)
@@ -152,6 +165,13 @@ class DualControlWindow(Gtk.Window):
         self.stop_button.set_sensitive(False)
         self.stop_button.connect("clicked", self._stop)
         box.pack_start(self.stop_button, False, False, 0)
+        self.record_button = Gtk.Button(label="● DATASET KAYDINI BAŞLAT")
+        self.record_button.set_sensitive(False)
+        self.record_button.connect("clicked", self._toggle_recording)
+        box.pack_start(self.record_button, False, False, 0)
+        self.recording_label = label("JPEG · kamera başına 2 FPS · kalite 92", "hint")
+        self.recording_label.set_line_wrap(True)
+        box.pack_start(self.recording_label, False, False, 0)
         sidebar.pack_start(frame, False, False, 0)
 
         frame, box = panel("KONTROL DEVRİ")
@@ -219,12 +239,22 @@ class DualControlWindow(Gtk.Window):
         self.start_button.set_sensitive(True)
         self.stop_button.set_sensitive(False)
 
-    def _show_error(self, message):
+    def _toggle_recording(self, _button):
+        try:
+            recording = self.runtime.recording_status()
+            if recording is not None and recording.active:
+                self.runtime.stop_recording()
+            else:
+                self.runtime.start_recording()
+        except Exception as error:
+            self._show_error(str(error), "Dataset kaydı başlatılamadı")
+
+    def _show_error(self, message, title="Çift kamera başlatılamadı"):
         dialog = Gtk.MessageDialog(
             transient_for=self,
             message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.CLOSE,
-            text="Çift kamera başlatılamadı",
+            text=title,
         )
         dialog.format_secondary_text(message)
         dialog.run()
@@ -261,6 +291,24 @@ class DualControlWindow(Gtk.Window):
             "UART: AÇIK" if snapshot.uart_enabled and snapshot.status == "RUNNING"
             else "UART: KAPALI"
         )
+        recording = self.runtime.recording_status()
+        self.record_button.set_sensitive(snapshot.status == "RUNNING")
+        self.record_button.set_label(
+            "■ DATASET KAYDINI DURDUR"
+            if recording is not None and recording.active
+            else "● DATASET KAYDINI BAŞLAT"
+        )
+        if recording is not None and recording.error:
+            self.recording_label.set_text(f"Kayıt hatası: {recording.error}")
+        elif recording is not None and recording.directory is not None:
+            state = "KAYIT AÇIK" if recording.active else "Kayıt kapalı"
+            self.recording_label.set_text(
+                f"{state} · {recording.directory.name}\n"
+                f"CAM0 {recording.saved[0]} · CAM1 {recording.saved[1]} JPEG · "
+                f"düşen {sum(recording.dropped)}"
+            )
+        else:
+            self.recording_label.set_text("JPEG · kamera başına 2 FPS · kalite 92")
         target = snapshot.active_target
         if target is None:
             self.target_label.set_text("HEDEF YOK")
@@ -282,7 +330,8 @@ class DualControlWindow(Gtk.Window):
                 continue
             for item in result.targets:
                 table_rows.append((slot, item.track_id, CAMERA_NAMES[slot],
-                                   str(item.track_id), f"%{item.confidence * 100:.0f}",
+                                   str(item.track_id), item.label,
+                                   f"%{item.confidence * 100:.0f}",
                                    f"{item.dx_px:+.0f}", f"{item.dy_px:+.0f}"))
         signature = tuple(table_rows)
         if signature != self._table_signature:
@@ -338,13 +387,17 @@ class DualControlWindow(Gtk.Window):
 def main():
     parser = argparse.ArgumentParser(description="İki kamera, tek Hailo kontrol arayüzü")
     parser.add_argument("--uart", action="store_true", help="STM32 UART çıkışını aç")
-    parser.add_argument("--model", type=Path, default=DEFAULT_HEF)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
+                        help="Aktif model profilinin bulunduğu config.json")
     parser.add_argument(
         "--display-backend", choices=("gtk", "wayland"), default="gtk",
         help="gtk: VNC uyumlu arayüz çizimi; wayland: eski doğrudan sink",
     )
     args = parser.parse_args()
-    window = DualControlWindow(args)
+    try:
+        window = DualControlWindow(args)
+    except (ValueError, FileNotFoundError) as error:
+        parser.error(str(error))
     window.maximize()
     window.show_all()
     Gtk.main()

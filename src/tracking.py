@@ -187,6 +187,7 @@ class ClassAwareByteTracker:
         class_labels=CLASS_LABELS,
         priority_labels=CLASS_LABELS,
         sticky_labels=("CELL PHONE",),
+        labels_by_id=None,
     ):
         self._lock = RLock()
 
@@ -203,6 +204,9 @@ class ClassAwareByteTracker:
         self.class_labels = tuple(label.upper() for label in class_labels)
         self.priority_labels = tuple(label.upper() for label in priority_labels)
         self.sticky_labels = frozenset(label.upper() for label in sticky_labels)
+        self.labels_by_id = (None if labels_by_id is None else
+                             {int(class_id): label.upper()
+                              for class_id, label in labels_by_id.items()})
 
         if not self.class_labels:
             raise ValueError("En az bir takip sınıfı gerekli")
@@ -269,7 +273,9 @@ class ClassAwareByteTracker:
             grouped = {label: [] for label in self.class_labels}
 
             for detection in raw_detections:
-                label = detection.get_label().upper()
+                label = (detection.get_label().upper()
+                         if self.labels_by_id is None else
+                         self.labels_by_id.get(detection.get_class_id()))
 
                 if label not in grouped:
                     continue

@@ -1,0 +1,46 @@
+{
+  "active_profile": "phone",
+  "camera": {"flip_vertical": true},
+  "profiles": {
+    "phone": {
+      "display_name": "Telefon",
+      "hef": "models/phone.hef",
+      "postprocess_so": "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so",
+      "postprocess_function": "filter",
+      "match_by": "label",
+      "expected_classes": 80,
+      "targets": [{"id": 67, "label": "cell phone"}],
+      "priority": ["cell phone"],
+      "sticky": ["cell phone"],
+      "confidence": 0.15,
+      "low_threshold": 0.10,
+      "high_threshold": 0.15,
+      "new_track_threshold": 0.15
+    },
+    "drone_bird": {
+      "display_name": "Drone / Bird",
+      "hef": "models/yolo11s.hef",
+      "postprocess_so": "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so",
+      "postprocess_function": "filter",
+      "postprocess": {
+        "detection_threshold": 0.10,
+        "max_boxes": 100,
+        "labels": ["DRONE", "BIRD"]
+      },
+      "match_by": "label",
+      "expected_classes": 2,
+      "targets": [
+        {"id": 0, "label": "DRONE"},
+        {"id": 1, "label": "BIRD"}
+      ],
+      "priority": ["DRONE", "BIRD"],
+      "sticky": ["DRONE"],
+      "confidence": 0.30,
+      "low_threshold": 0.10,
+      "high_threshold": 0.25,
+      "new_track_threshold": 0.35,
+      "nms_score_threshold": 0.10,
+      "nms_iou_threshold": 0.45
+    }
+  }
+}

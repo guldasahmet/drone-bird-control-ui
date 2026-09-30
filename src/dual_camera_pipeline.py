@@ -1,6 +1,8 @@
 """Two Picamera2 cameras, one Hailo, and two independent UI video panels."""
 
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from time import monotonic
 
@@ -14,13 +16,20 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gst", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gst, Gtk
 
+from dataset_recorder import DatasetRecorder
+
 
 WIDTH = 640
 HEIGHT = 640
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DualCameraPipeline:
     def __init__(self, *, fps, hef_path, post_so, on_filter, on_detection,
+                 post_function="filter", post_config_data=None,
+                 profile_name="phone",
+                 nms_score_threshold=None, nms_iou_threshold=None,
+                 flip_vertical=False,
                  widget_handler=None, display_backend="gtk"):
         Gst.init(None)
         if display_backend not in ("gtk", "wayland"):
@@ -57,6 +66,10 @@ class DualCameraPipeline:
         self.last_inference_count = 0
         self.last_branch_counts = [0, 0]
         self.last_render_counts = [0, 0]
+        self.recorder = DatasetRecorder(PROJECT_ROOT / "dataset", width=WIDTH,
+                                        height=HEIGHT, fps=2, quality=92,
+                                        profile_name=profile_name,
+                                        inference_vertical_flip=flip_vertical)
 
         hef_path = Path(hef_path).expanduser().resolve()
         post_so = Path(post_so).expanduser().resolve()
@@ -64,9 +77,30 @@ class DualCameraPipeline:
             raise FileNotFoundError(f"HEF modeli bulunamadı: {hef_path}")
         if not post_so.is_file():
             raise FileNotFoundError(f"YOLO postprocess bulunamadı: {post_so}")
+        self._postprocess_temp = None
+        post_config_option = ""
+        if post_config_data is not None:
+            self._postprocess_temp = TemporaryDirectory(prefix="drone-bird-post-")
+            post_config = Path(self._postprocess_temp.name) / "labels.json"
+            post_config.write_text(
+                json.dumps(post_config_data, ensure_ascii=False), encoding="utf-8"
+            )
+            post_config_option = f' config-path="{post_config}"'
+        camera_flips = [
+            (f"videoflip name=camera_flip_{slot} video-direction=vert "
+             "qos=false ! ") if flip_vertical else ""
+            for slot in (0, 1)
+        ]
+        nms_options = ""
+        if nms_score_threshold is not None:
+            nms_options += f" nms-score-threshold={nms_score_threshold:.3f}"
+        if nms_iou_threshold is not None:
+            nms_options += f" nms-iou-threshold={nms_iou_threshold:.3f}"
+        if nms_options:
+            nms_options += " output-format-type=HAILO_FORMAT_TYPE_FLOAT32"
 
-        # Keep the capture, timestamp and Hailo path of the 30+30 FPS
-        # reference. Only the final UI renderer is selectable.
+        # Keep the capture, timestamp and single-Hailo path of the 30+30 FPS
+        # reference; flip each camera before inference when configured.
         if widget_handler and display_backend == "gtk":
             displays = [
                 f"video/x-raw,format=RGB,width={WIDTH},height={HEIGHT} ! "
@@ -85,9 +119,9 @@ class DualCameraPipeline:
         description = f"""
 hailoroundrobin name=rr mode=0 !
     queue name=preinfer_q max-size-buffers=3 !
-    hailonet name=infer hef-path="{hef_path}" batch-size=1 force-writable=true !
+    hailonet name=infer hef-path="{hef_path}" batch-size=1{nms_options} force-writable=true !
     queue name=post_q max-size-buffers=3 !
-    hailofilter name=post so-path="{post_so}" function-name=filter qos=false !
+    hailofilter name=post so-path="{post_so}" function-name={post_function}{post_config_option} qos=false !
     queue name=overlay_q max-size-buffers=3 !
     identity name=target_filter signal-handoffs=true !
     queue name=router_q max-size-buffers=3 !
@@ -98,12 +132,12 @@ hailoroundrobin name=rr mode=0 !
 appsrc name=cam0_src is-live=true do-timestamp=true format=time
     block=false leaky-type=downstream max-buffers=3
     caps=video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={fps}/1 !
-    queue name=cam0_in_q leaky=downstream max-size-buffers=3 ! rr.sink_0
+    {camera_flips[0]}queue name=cam0_in_q leaky=downstream max-size-buffers=3 ! rr.sink_0
 
 appsrc name=cam1_src is-live=true do-timestamp=true format=time
     block=false leaky-type=downstream max-buffers=3
     caps=video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={fps}/1 !
-    queue name=cam1_in_q leaky=downstream max-size-buffers=3 ! rr.sink_1
+    {camera_flips[1]}queue name=cam1_in_q leaky=downstream max-size-buffers=3 ! rr.sink_1
 
 router.src_0 !
     queue name=cam0_display_q leaky=downstream max-size-buffers=2 !
@@ -123,7 +157,12 @@ router.src_1 !
     identity name=display_count_1 signal-handoffs=true !
     {displays[1]}
 """
-        self.pipeline = Gst.parse_launch(description)
+        try:
+            self.pipeline = Gst.parse_launch(description)
+        except Exception:
+            if self._postprocess_temp is not None:
+                self._postprocess_temp.cleanup()
+            raise
         self.sources = [
             self.pipeline.get_by_name("cam0_src"),
             self.pipeline.get_by_name("cam1_src"),
@@ -310,6 +349,7 @@ router.src_1 !
                     break
                 if flow != Gst.FlowReturn.OK:
                     raise RuntimeError(f"push-buffer sonucu: {flow}")
+                self.recorder.offer(slot, raw)
                 with self.count_lock:
                     self.camera_counts[slot] += 1
                     if self.camera_counts[slot] % self.fps == 0:
@@ -374,6 +414,17 @@ router.src_1 !
             return (self.camera_levels.copy(), self.sink_levels.copy(),
                     self.branch_fps.copy())
 
+    def start_recording(self):
+        if not self.started or not self.running.is_set():
+            raise RuntimeError("Önce çift kamera akışını başlatın")
+        return self.recorder.start()
+
+    def stop_recording(self):
+        self.recorder.stop()
+
+    def recording_status(self):
+        return self.recorder.status()
+
     def start(self):
         try:
             for index in (0, 1):
@@ -408,6 +459,7 @@ router.src_1 !
             return
         self.stopped = True
         self.running.clear()
+        self.recorder.stop()
         for camera in self.cameras:
             try:
                 camera.stop()
@@ -433,3 +485,6 @@ router.src_1 !
                 self.widget_handler(slot, None)
                 self.video_widgets[slot] = None
                 self.pixbufs[slot] = None
+        if self._postprocess_temp is not None:
+            self._postprocess_temp.cleanup()
+            self._postprocess_temp = None
