@@ -4,7 +4,8 @@
 
 `./run.sh`, IMX296 Global Shutter ve IMX477 HQ kameralarını aynı süreçte,
 tek Hailo-8 üzerinde çalıştırır. Başlangıç kontrolü HQ'dadır; Global Shutter
-telefonu gördüğünde kontrol ona geçer ve beş kayıp kareden sonra HQ'ya döner.
+telefonu iki ardışık doğrulanmış karede gördüğünde kontrol ona geçer ve beş
+kayıp kareden sonra HQ'ya döner.
 İki kamera bu sırada da sürekli görüntü üretir. GTK ekranı iki canlı görüntüyü,
 hedefleri, kamera devrini ve kamera/Hailo FPS değerlerini gösterir.
 
@@ -18,11 +19,22 @@ cd /home/spikeedge/Desktop/hailo-workspace/drone-bird-control-ui
 ./run.sh
 ```
 
-`./run.sh` UART'ı açmaz. STM ile bilinçli deneme için `./run.sh --uart`
-kullanılır. STM hız yanıtı vermesine rağmen motor hareketi henüz
-doğrulanmadığından motor çalışması arayüz testiyle kanıtlanmış sayılmaz.
+`./run.sh` UART'ı açmaz. STM ile deneme için `./run.sh --uart` kullanılır.
+Çift kamera telefon profilinde STM'ye giden X ve Y hata işaretleri, çalışan
+`drone-bird-control` ile aynı biçimde ters çevrilir. Arayüzdeki hedef hatası
+görüntü koordinatı, terminaldeki `STM hata` gönderilecek koordinattır.
 İki kamera da 640×640 @30 FPS hedefiyle çalışır; gerçek FPS ekranda ölçülür.
 F11 tam ekranı açıp kapatır.
+
+Arayüz görüntüsü varsayılan olarak `appsink → GTK` üzerinden çizilir; bu yol
+TigerVNC'de siyah kalan Wayland video yüzeyini kullanmaz. Eski görüntü yolunu
+karşılaştırmak için `./run.sh --display-backend wayland` kullanılabilir.
+Bu seçenek yalnızca görüntünün çizildiği son aşamayı değiştirir. Terminalde
+her kamera için `kamera` (yakalanan kare), `hat` (Hailo sonrası kare),
+`pencere` (GTK tarafından çizilen kare) FPS değerleri ile kamera ve görüntü
+sink'i örnek karelerinin `parlaklık` değerleri yazılır. Arayüz ilk görüntüyü
+almadan çalışıyor durumuna geçmez; görüntü gelmezse sekiz saniye içinde tanı
+bilgisiyle hata verir.
 
 Akış: `Picamera2 ×2 → appsrc (otomatik timestamp) → hailoroundrobin →
 hailonet → hailofilter → hailostreamrouter → iki GTK görüntüsü`. Kontrol
@@ -190,6 +202,7 @@ drone-bird-control-ui/
 ├── native/       # Native GStreamer overlay
 ├── tests/        # Core ve donanım smoke testleri
 ├── run.sh
+├── run-headless.sh # İki kamera, arayüzsüz veya yan yana görüntü
 └── README.md
 ```
 
@@ -206,17 +219,31 @@ hailo-workspace/
 Uygulamayı başlatmak için:
 
 ```bash
-cd /home/raspberrypi/Desktop/hailo-workspace/drone-bird-control-ui
+cd /home/spikeedge/Desktop/hailo-workspace/drone-bird-control-ui
 ./run.sh
 ```
 
 `run.sh`, Hailo ortamını yükler, Python yolunu ayarlar ve native overlay'i
 gerektiğinde otomatik olarak derler.
 
+### Çift kamera tespiti
+
+`run-headless.sh`, iki kamerayı aynı Hailo-8 inference hattında çalıştırır.
+Her kamera için ayrı ByteTrack durumu tutulur. Bu kipte UART kapalıdır ve
+kameralar arasında hedef devri yapılmaz.
+
+```bash
+./run-headless.sh --fps 30
+```
+
+İki kamerayı tespit kutularıyla yan yana görmek için `--display` ekleyin.
+Kamera indeksleri `--camera0` ve `--camera1` ile değiştirilebilir; fiziksel
+kameralarla eşleşmelerini cihaz üzerinde doğrulayın.
+
 ## Test
 
 ```bash
-cd /home/raspberrypi/Desktop/hailo-workspace/hailo-apps
+cd /home/spikeedge/Desktop/hailo-workspace/hailo-apps
 source setup_env.sh
 cd ../drone-bird-control-ui
 PYTHONPATH="$PWD/src:$PYTHONPATH" python -m unittest discover -s tests -v

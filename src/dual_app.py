@@ -49,6 +49,7 @@ class DualControlWindow(Gtk.Window):
             self._mount_widget,
             model_path=args.model,
             uart_enabled=args.uart,
+            display_backend=getattr(args, "display_backend", "gtk"),
         )
         self._load_theme()
         self._build()
@@ -247,8 +248,15 @@ class DualControlWindow(Gtk.Window):
         self.header_status.set_text(f"● {snapshot.status}")
         self.message_label.set_text(snapshot.message)
         self.control_label.set_text(CAMERA_NAMES[snapshot.active_slot])
-        if snapshot.transition:
+        if snapshot.active_slot == 1 and snapshot.gs_confirm_count:
+            self.transition_label.set_text(
+                f"GS doğrulanıyor {snapshot.gs_confirm_count}/"
+                f"{snapshot.gs_confirm_frames}"
+            )
+        elif snapshot.transition:
             self.transition_label.set_text(snapshot.transition)
+        else:
+            self.transition_label.set_text("Başlangıç kontrolü HQ")
         self.uart_label.set_text(
             "UART: AÇIK" if snapshot.uart_enabled and snapshot.status == "RUNNING"
             else "UART: KAPALI"
@@ -295,8 +303,12 @@ class DualControlWindow(Gtk.Window):
             )
         self.performance_label.set_text(
             f"HAILO {snapshot.infer_fps:.1f} FPS\n"
-            f"CAM0 {snapshot.camera_fps[0]:.1f} / {snapshot.display_fps[0]:.1f} FPS\n"
-            f"CAM1 {snapshot.camera_fps[1]:.1f} / {snapshot.display_fps[1]:.1f} FPS"
+            f"CAM0 kamera {snapshot.camera_fps[0]:.1f} · "
+            f"hat {snapshot.branch_fps[0]:.1f} · "
+            f"ekran {snapshot.display_fps[0]:.1f}\n"
+            f"CAM1 kamera {snapshot.camera_fps[1]:.1f} · "
+            f"hat {snapshot.branch_fps[1]:.1f} · "
+            f"ekran {snapshot.display_fps[1]:.1f} FPS"
         )
         return True
 
@@ -327,6 +339,10 @@ def main():
     parser = argparse.ArgumentParser(description="İki kamera, tek Hailo kontrol arayüzü")
     parser.add_argument("--uart", action="store_true", help="STM32 UART çıkışını aç")
     parser.add_argument("--model", type=Path, default=DEFAULT_HEF)
+    parser.add_argument(
+        "--display-backend", choices=("gtk", "wayland"), default="gtk",
+        help="gtk: VNC uyumlu arayüz çizimi; wayland: eski doğrudan sink",
+    )
     args = parser.parse_args()
     window = DualControlWindow(args)
     window.maximize()

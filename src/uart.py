@@ -27,11 +27,13 @@ def pack_target_packet(header, error_x, error_y):
 class TargetUart:
     """Aktif hedef hatasını STM32'ye ileten opsiyonel seri bağlantı."""
 
-    def __init__(self, enabled, port, baudrate, invert_x=True, serial_factory=None):
+    def __init__(self, enabled, port, baudrate, invert_x=True,
+                 serial_factory=None, *, invert_y=False):
         self.enabled = bool(enabled)
         self.port = str(port)
         self.baudrate = int(baudrate)
         self.invert_x = bool(invert_x)
+        self.invert_y = bool(invert_y)
         self.serial_factory = serial_factory or serial.Serial
         self.serial = None
 
@@ -58,9 +60,12 @@ class TargetUart:
             raise RuntimeError(f"Seri port açılamadı ({self.port}): {error}") from error
 
     def wire_errors(self, error_x, error_y):
-        x_value = int16_value(error_x)
-        y_value = int16_value(error_y)
-        return (-x_value if self.invert_x else x_value), y_value
+        x_value = int(error_x)
+        y_value = int(error_y)
+        return (
+            int16_value(-x_value if self.invert_x else x_value),
+            int16_value(-y_value if self.invert_y else y_value),
+        )
 
     def send_target(self, error_x, error_y, locked=False):
         wire_x, wire_y = self.wire_errors(error_x, error_y)

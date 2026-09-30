@@ -28,6 +28,7 @@ native/build/
 *.log
 logs/
 captures/
+videos/
 
 # Editor and OS files
 .idea/

@@ -26,6 +26,7 @@ def main():
     window._show_error = lambda message: print(f"DUAL_UI_ERROR {message}", flush=True)
     window.maximize()
     window.show_all()
+    cycle_results = []
 
     def start():
         window._start(None)
@@ -43,12 +44,40 @@ def main():
         )
         return False
 
-    GLib.timeout_add(500, start)
-    if os.environ.get("SMOKE_RESTART") == "1":
-        GLib.timeout_add_seconds(4, lambda: window._stop() or False)
-        GLib.timeout_add_seconds(5, start)
-    GLib.timeout_add_seconds(int(os.environ.get("SMOKE_SECONDS", "8")), finish)
+    def sample_and_stop(cycle):
+        sample = window.runtime.snapshot()
+        cycle_results.append(sample)
+        print(
+            f"DUAL_UI_CYCLE {cycle} status={sample.status} "
+            f"camera={sample.camera_fps} display={sample.display_fps} "
+            f"hailo={sample.infer_fps:.1f} uart={sample.uart_enabled}",
+            flush=True,
+        )
+        window._stop()
+        return False
+
+    cycles = int(os.environ.get("SMOKE_CYCLES", "0"))
+    if cycles:
+        for index in range(cycles):
+            GLib.timeout_add(500 + 5000 * index, start)
+            GLib.timeout_add(4500 + 5000 * index,
+                             sample_and_stop, index + 1)
+        GLib.timeout_add(5000 * cycles + 500, finish)
+    else:
+        GLib.timeout_add(500, start)
+        if os.environ.get("SMOKE_RESTART") == "1":
+            GLib.timeout_add_seconds(4, lambda: window._stop() or False)
+            GLib.timeout_add_seconds(5, start)
+        GLib.timeout_add_seconds(int(os.environ.get("SMOKE_SECONDS", "8")), finish)
     Gtk.main()
+    if cycles and (
+        len(cycle_results) != cycles
+        or any(sample.status != "RUNNING"
+               or min(sample.display_fps) < 20
+               or sample.infer_fps < 40
+               for sample in cycle_results)
+    ):
+        raise SystemExit("Çift kamera yeniden başlatma testi başarısız")
 
 
 if __name__ == "__main__":

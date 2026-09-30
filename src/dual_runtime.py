@@ -23,14 +23,25 @@ PHONE_LABELS = Path(__file__).resolve().parents[1] / "config" / "phone_labels.js
 CAMERA_NAMES = ("GLOBAL SHUTTER", "HQ")
 
 
-class HandoffController:
-    """Same five-miss and stale-target policy as drone-bird-control."""
+def target_pixel_errors(target):
+    """Use the same pixel-center rounding as drone-bird-control and denme."""
+    return (
+        int(target.center_x * WIDTH) - WIDTH // 2,
+        int(target.center_y * HEIGHT) - HEIGHT // 2,
+    )
 
-    def __init__(self, lost_frames=5, max_age_seconds=0.3):
+
+class HandoffController:
+    """HQ controls until GS is confirmed; five GS misses return control to HQ."""
+
+    def __init__(self, lost_frames=5, max_age_seconds=0.3, gs_confirm_frames=2):
         self.lock = Lock()
         self.active_slot = 1
         self.lost_frames = lost_frames
         self.max_age_seconds = max_age_seconds
+        self.gs_confirm_frames = gs_confirm_frames
+        self.gs_confirm_count = 0
+        self.gs_candidate_id = None
         self.gs_misses = 0
         self.latest = {0: (None, 0.0), 1: (None, 0.0)}
 
@@ -38,20 +49,40 @@ class HandoffController:
         now = monotonic() if now is None else now
         transition = None
         with self.lock:
+            previous_gs_seen_at = self.latest[0][1]
             self.latest[slot] = (target, now)
             if slot == 0:
                 if target is not None:
                     self.gs_misses = 0
                     if self.active_slot != 0:
-                        self.active_slot = 0
-                        transition = "HQ → GLOBAL SHUTTER"
-                elif self.active_slot == 0:
-                    self.gs_misses += 1
-                    if self.gs_misses >= self.lost_frames:
-                        self.active_slot = 1
-                        self.gs_misses = 0
-                        transition = "GLOBAL SHUTTER → HQ"
+                        candidate_id = getattr(target, "track_id", None)
+                        if (now - previous_gs_seen_at > self.max_age_seconds
+                                or candidate_id != self.gs_candidate_id):
+                            self.gs_confirm_count = 0
+                        self.gs_candidate_id = candidate_id
+                        self.gs_confirm_count += 1
+                        if self.gs_confirm_count >= self.gs_confirm_frames:
+                            self.active_slot = 0
+                            self.gs_confirm_count = 0
+                            self.gs_candidate_id = None
+                            transition = "HQ → GLOBAL SHUTTER"
+                else:
+                    self.gs_confirm_count = 0
+                    self.gs_candidate_id = None
+                    if self.active_slot == 0:
+                        self.gs_misses += 1
+                        if self.gs_misses >= self.lost_frames:
+                            self.active_slot = 1
+                            self.gs_misses = 0
+                            transition = "GLOBAL SHUTTER → HQ"
         return transition
+
+    def confirmation_progress(self, now=None):
+        now = monotonic() if now is None else now
+        with self.lock:
+            if now - self.latest[0][1] > self.max_age_seconds:
+                return 0, self.gs_confirm_frames
+            return self.gs_confirm_count, self.gs_confirm_frames
 
     def snapshot(self, now=None):
         now = monotonic() if now is None else now
@@ -76,6 +107,9 @@ class DualSnapshot:
     display_fps: tuple[float, float]
     uart_enabled: bool
     transition: str
+    gs_confirm_count: int
+    gs_confirm_frames: int
+    branch_fps: tuple[float, float]
 
 
 class DualVisionRuntime:
@@ -83,7 +117,8 @@ class DualVisionRuntime:
                  postprocess_path=DEFAULT_POSTPROCESS, fps=30,
                  confidence=0.15, uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
-                 invert_x=False, lock_tolerance=50):
+                 invert_x=True, invert_y=True, lock_tolerance=50,
+                 display_backend="gtk"):
         self.widget_handler = widget_handler
         self.model_path = Path(model_path)
         self.postprocess_path = Path(postprocess_path)
@@ -93,7 +128,9 @@ class DualVisionRuntime:
         self.uart_port = uart_port
         self.baudrate = baudrate
         self.invert_x = invert_x
+        self.invert_y = invert_y
         self.lock_tolerance = lock_tolerance
+        self.display_backend = display_backend
         with PHONE_LABELS.open(encoding="utf-8") as handle:
             labels = json.load(handle).get("target_labels", [])
         self.target_labels = {str(label).strip().casefold() for label in labels}
@@ -111,6 +148,7 @@ class DualVisionRuntime:
         self.status = "STOPPED"
         self.message = "Hazır"
         self.transition = ""
+        self.started_at = 0.0
 
     def _new_tracker(self):
         return ClassAwareByteTracker(
@@ -164,10 +202,10 @@ class DualVisionRuntime:
                 if target is None:
                     self.uart.send_no_target()
                 else:
-                    locked = (abs(target.dx_px) <= self.lock_tolerance
-                              and abs(target.dy_px) <= self.lock_tolerance)
-                    self.uart.send_target(target.dx_px, target.dy_px,
-                                          locked=locked)
+                    error_x, error_y = target_pixel_errors(target)
+                    locked = (abs(error_x) <= self.lock_tolerance
+                              and abs(error_y) <= self.lock_tolerance)
+                    self.uart.send_target(error_x, error_y, locked=locked)
                 self.uart.read_message()
             except Exception as error:
                 with self.lock:
@@ -185,6 +223,7 @@ class DualVisionRuntime:
         self.results = [None, None]
         self.metrics = ((0.0, 0.0), 0.0, (0.0, 0.0))
         self.transition = ""
+        self.started_at = monotonic()
         self.output_stop.clear()
         try:
             hef = HEF(str(self.model_path.expanduser().resolve()))
@@ -194,6 +233,7 @@ class DualVisionRuntime:
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,
                 invert_x=self.invert_x,
+                invert_y=self.invert_y,
             )
             self.uart.open()
             self.pipeline = DualCameraPipeline(
@@ -203,6 +243,7 @@ class DualVisionRuntime:
                 on_filter=self._filter,
                 on_detection=self._detect,
                 widget_handler=self.widget_handler,
+                display_backend=self.display_backend,
             )
             self.pipeline.start()
             if self.uart_enabled:
@@ -211,8 +252,8 @@ class DualVisionRuntime:
                     name="stm32-output",
                 )
                 self.output_thread.start()
-            self.status = "RUNNING"
-            self.message = "İki kamera ve tek Hailo çalışıyor"
+            self.status = "STARTING"
+            self.message = "İki kameranın ilk görüntüsü bekleniyor"
         except Exception:
             self.stop()
             raise
@@ -226,7 +267,24 @@ class DualVisionRuntime:
                 self.message = self.pipeline.error
             return
         self.metrics = self.pipeline.fps_snapshot()
+        if self.status == "STARTING":
+            if self.pipeline.first_frames_ready():
+                self.status = "RUNNING"
+                self.message = "İki kameranın görüntüsü arayüze ulaştı"
+            elif monotonic() - self.started_at > 8.0:
+                levels, sink_levels, branches = self.pipeline.frame_diagnostics()
+                self.status = "ERROR"
+                self.message = (
+                    "Görüntü başlatılamadı: "
+                    f"CAM0 hat={branches[0]:.0f} FPS, ekran={self.metrics[2][0]:.0f} FPS; "
+                    f"CAM1 hat={branches[1]:.0f} FPS, ekran={self.metrics[2][1]:.0f} FPS; "
+                    f"kamera parlaklığı={levels[0]:.1f}/{levels[1]:.1f}; "
+                    f"sink parlaklığı={sink_levels[0]:.1f}/{sink_levels[1]:.1f}"
+                )
+                return
         active, target, latest = self.controller.snapshot()
+        gs_confirm_count, gs_confirm_frames = self.controller.confirmation_progress()
+        levels, sink_levels, branches = self.pipeline.frame_diagnostics()
         for slot in (0, 1):
             item, seen_at = latest[slot]
             target_text = (
@@ -237,24 +295,44 @@ class DualVisionRuntime:
             print(
                 f"[src_{slot}] {CAMERA_NAMES[slot]} | "
                 f"kamera={self.metrics[0][slot]:.1f} FPS | "
-                f"pencere={self.metrics[2][slot]:.1f} FPS | {target_text}",
+                f"hat={branches[slot]:.1f} FPS | "
+                f"pencere={self.metrics[2][slot]:.1f} FPS | "
+                f"parlaklık={levels[slot]:.1f}"
+                + (f"→{sink_levels[slot]:.1f}" if self.display_backend == "gtk"
+                   else "")
+                + f" | {target_text}",
                 flush=True,
             )
+        control_text = (
+            f" | GS doğrulama={gs_confirm_count}/{gs_confirm_frames}"
+            if active == 1 and gs_confirm_count else ""
+        )
+        wire_text = ""
+        if self.uart_enabled and self.uart is not None:
+            wire_x, wire_y = (
+                (0, 0) if target is None
+                else self.uart.wire_errors(*target_pixel_errors(target))
+            )
+            wire_text = f" | STM hata=({wire_x:+d},{wire_y:+d})"
         print(
             f"HAILO={self.metrics[1]:.1f} FPS | "
             f"KONTROL={CAMERA_NAMES[active]} | "
-            f"UART={'açık' if self.uart_enabled else 'kapalı'}",
+            f"UART={'açık' if self.uart_enabled else 'kapalı'}"
+            f"{control_text}{wire_text}",
             flush=True,
         )
 
     def snapshot(self):
         active, target, _ = self.controller.snapshot()
+        gs_confirm_count, gs_confirm_frames = self.controller.confirmation_progress()
         with self.lock:
             return DualSnapshot(
                 self.status, self.message, active, target,
                 tuple(self.results), tuple(self.metrics[0]),
                 self.metrics[1], tuple(self.metrics[2]),
                 self.uart_enabled, self.transition,
+                gs_confirm_count, gs_confirm_frames,
+                tuple(self.pipeline.branch_fps) if self.pipeline else (0.0, 0.0),
             )
 
     def stop(self):
