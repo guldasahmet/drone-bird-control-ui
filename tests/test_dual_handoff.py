@@ -47,6 +47,16 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(controller.snapshot(now=1.22)[0], 1)
         self.assertIsNone(controller.snapshot(now=1.4)[1])
 
+    def test_hold_hq_never_hands_control_to_gs(self):
+        controller = HandoffController(hold_hq=True)
+        phone = object()
+        for frame in range(5):
+            self.assertIsNone(controller.observe(0, phone, now=1.0 + frame * 0.02))
+        self.assertEqual(controller.confirmation_progress(now=1.08), (0, 2))
+        self.assertEqual(controller.snapshot(now=1.08)[0], 1)
+        controller.observe(1, phone, now=1.1)
+        self.assertIs(controller.snapshot(now=1.1)[1], phone)
+
     def test_gs_confirmation_resets_after_miss_and_stale_gap(self):
         controller = HandoffController(max_age_seconds=0.3)
         phone = object()

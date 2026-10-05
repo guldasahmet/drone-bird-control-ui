@@ -71,10 +71,15 @@ def add_overlay_objects(roi, width, height, tracking):
 
 
 class HandoffController:
-    """HQ controls until GS is confirmed; five GS misses return control to HQ."""
+    """HQ controls until GS is confirmed; five GS misses return control to HQ.
 
-    def __init__(self, lost_frames=5, max_age_seconds=0.3, gs_confirm_frames=2):
+    With hold_hq, GS is still observed but never takes control.
+    """
+
+    def __init__(self, lost_frames=5, max_age_seconds=0.3, gs_confirm_frames=2,
+                 hold_hq=False):
         self.lock = Lock()
+        self.hold_hq = hold_hq
         self.active_slot = 1
         self.lost_frames = lost_frames
         self.max_age_seconds = max_age_seconds
@@ -90,7 +95,7 @@ class HandoffController:
         with self.lock:
             previous_gs_seen_at = self.latest[0][1]
             self.latest[slot] = (target, now)
-            if slot == 0:
+            if slot == 0 and not self.hold_hq:
                 if target is not None:
                     self.gs_misses = 0
                     if self.active_slot != 0:
@@ -156,7 +161,7 @@ class DualVisionRuntime:
                  uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=25,
-                 display_backend="gtk"):
+                 display_backend="gtk", hold_hq=False):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
         self.model_path = self.profile.hef
@@ -170,13 +175,14 @@ class DualVisionRuntime:
         self.invert_y = invert_y
         self.lock_tolerance = lock_tolerance
         self.display_backend = display_backend
+        self.hold_hq = hold_hq
         self.target_ids = frozenset(self.profile.labels_by_id)
         self.target_labels = {label.casefold() for label in self.profile.target_names}
         self.pipeline = None
         self.uart = None
         self.output_stop = Event()
         self.output_thread = None
-        self.controller = HandoffController()
+        self.controller = HandoffController(hold_hq=self.hold_hq)
         self.trackers = [self._new_tracker(), self._new_tracker()]
         self.results = [None, None]
         self.metrics = ((0.0, 0.0), 0.0, (0.0, 0.0))
@@ -265,7 +271,7 @@ class DualVisionRuntime:
             return
         self.status = "STARTING"
         self.message = "Kameralar ve Hailo hazırlanıyor"
-        self.controller = HandoffController()
+        self.controller = HandoffController(hold_hq=self.hold_hq)
         self.trackers = [self._new_tracker(), self._new_tracker()]
         self.results = [None, None]
         self.metrics = ((0.0, 0.0), 0.0, (0.0, 0.0))
@@ -375,6 +381,7 @@ class DualVisionRuntime:
             f"HAILO={self.metrics[1]:.1f} FPS | "
             f"KONTROL={CAMERA_NAMES[active]} | "
             f"UART={'açık' if self.uart_enabled else 'kapalı'}"
+            f"{' | HQ SABİT' if self.hold_hq else ''}"
             f"{control_text}{wire_text}",
             flush=True,
         )

@@ -52,6 +52,7 @@ class DualControlWindow(Gtk.Window):
             profile=self.profile,
             uart_enabled=args.uart,
             display_backend=getattr(args, "display_backend", "gtk"),
+            hold_hq=getattr(args, "hold_hq", False),
         )
         self._load_theme()
         self._build()
@@ -393,6 +394,8 @@ def main():
         "--display-backend", choices=("gtk", "wayland"), default="gtk",
         help="gtk: VNC uyumlu arayüz çizimi; wayland: eski doğrudan sink",
     )
+    parser.add_argument("--hold-hq", action="store_true",
+                        help="Kontrolü HQ'da sabitle; GS'ye kamera devri yapma")
     args = parser.parse_args()
     try:
         window = DualControlWindow(args)
