@@ -410,8 +410,8 @@ class ClassAwareByteTracker:
             return ("ACQUIRING" if raw_count else "SEARCHING"), 0.0
 
         centered = (
-            abs(active.dx_px) <= self.lock_tolerance_px
-            and abs(active.dy_px) <= self.lock_tolerance_px
+            abs(active.dx_px) < self.lock_tolerance_px
+            and abs(active.dy_px) < self.lock_tolerance_px
         )
 
         if not centered:

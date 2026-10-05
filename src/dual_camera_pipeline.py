@@ -29,7 +29,7 @@ class DualCameraPipeline:
                  post_function="filter", post_config_data=None,
                  profile_name="phone",
                  nms_score_threshold=None, nms_iou_threshold=None,
-                 flip_vertical=False,
+                 flip_vertical=False, lock_tolerance=25,
                  widget_handler=None, display_backend="gtk"):
         Gst.init(None)
         if display_backend not in ("gtk", "wayland"):
@@ -142,7 +142,7 @@ appsrc name=cam1_src is-live=true do-timestamp=true format=time
 router.src_0 !
     queue name=cam0_display_q leaky=downstream max-size-buffers=2 !
     identity name=detect0 signal-handoffs=true !
-    bdtargetoverlay name=aim_0 lock-tolerance=50 !
+    bdtargetoverlay name=aim_0 lock-tolerance={lock_tolerance} !
     hailooverlay name=overlay_0 line-thickness=1 show-confidence=false qos=false !
     videoconvert n-threads=2 qos=false !
     identity name=display_count_0 signal-handoffs=true !
@@ -151,7 +151,7 @@ router.src_0 !
 router.src_1 !
     queue name=cam1_display_q leaky=downstream max-size-buffers=2 !
     identity name=detect1 signal-handoffs=true !
-    bdtargetoverlay name=aim_1 lock-tolerance=50 !
+    bdtargetoverlay name=aim_1 lock-tolerance={lock_tolerance} !
     hailooverlay name=overlay_1 line-thickness=1 show-confidence=false qos=false !
     videoconvert n-threads=2 qos=false !
     identity name=display_count_1 signal-handoffs=true !

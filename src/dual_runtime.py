@@ -155,7 +155,7 @@ class DualVisionRuntime:
     def __init__(self, widget_handler, *, profile=None, fps=30,
                  uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
-                 invert_x=True, invert_y=True, lock_tolerance=50,
+                 invert_x=True, invert_y=True, lock_tolerance=25,
                  display_backend="gtk"):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
@@ -249,8 +249,9 @@ class DualVisionRuntime:
                     error_x, error_y = target_pixel_errors(
                         target, flip_vertical=self.profile.camera_flip_vertical
                     )
-                    locked = (abs(error_x) <= self.lock_tolerance
-                              and abs(error_y) <= self.lock_tolerance)
+                    # Match STM32: lock only while both errors are strictly < tolerance.
+                    locked = (abs(error_x) < self.lock_tolerance
+                              and abs(error_y) < self.lock_tolerance)
                     self.uart.send_target(error_x, error_y, locked=locked)
                 self.uart.read_message()
             except Exception as error:
@@ -291,6 +292,7 @@ class DualVisionRuntime:
                 nms_score_threshold=self.profile.nms_score_threshold,
                 nms_iou_threshold=self.profile.nms_iou_threshold,
                 flip_vertical=self.profile.camera_flip_vertical,
+                lock_tolerance=self.lock_tolerance,
                 on_filter=self._filter,
                 on_detection=self._detect,
                 widget_handler=self.widget_handler,
