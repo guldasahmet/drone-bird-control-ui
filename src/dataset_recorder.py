@@ -70,11 +70,14 @@ class DatasetRecorder:
                     "camera_directories": CAMERA_DIRS,
                     "width": self.width,
                     "height": self.height,
-                    "format": "BGR888 camera frames before Hailo overlay",
+                    "format": "Standard RGB JPEG of the frames the model sees "
+                              "(before Hailo overlay)",
+                    "jpeg_color": "standard",
                     "sample_fps_per_camera": self.fps,
                     "jpeg_quality": self.quality,
                     "model_profile": self.profile_name,
-                    "jpeg_orientation": "camera_native",
+                    "jpeg_orientation": ("inference" if self.inference_vertical_flip
+                                         else "camera_native"),
                     "inference_vertical_flip": self.inference_vertical_flip,
                 },
                 indent=2,
@@ -128,6 +131,11 @@ class DatasetRecorder:
                 frame = np.frombuffer(raw, dtype=np.uint8).reshape(
                     self.height, self.width, 3
                 )
+                # Camera buffers are RGB; OpenCV encodes BGR. Save upright, as
+                # the model sees it after the inference flip.
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                if self.inference_vertical_flip:
+                    frame = np.flipud(frame)
                 ok, encoded = cv2.imencode(
                     ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality]
                 )

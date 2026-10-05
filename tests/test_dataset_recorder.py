@@ -15,7 +15,8 @@ class DatasetRecorderTests(unittest.TestCase):
             recorder = DatasetRecorder(Path(temp) / "dataset", profile_name="phone",
                                        inference_vertical_flip=True)
             directory = recorder.start()
-            frame = np.full((640, 640, 3), (10, 80, 170), dtype=np.uint8)
+            frame = np.full((640, 640, 3), (10, 80, 170), dtype=np.uint8)  # RGB
+            frame[:320] = (200, 200, 200)  # camera-native top half
             raw = frame.tobytes()
 
             self.assertTrue(recorder.offer(0, raw, now=10.0))
@@ -31,11 +32,17 @@ class DatasetRecorderTests(unittest.TestCase):
             for camera in ("cam0_global_shutter", "cam1_hq"):
                 images = list((directory / camera).glob("*.jpg"))
                 self.assertEqual(len(images), 1)
-                self.assertEqual(cv2.imread(str(images[0])).shape, (640, 640, 3))
+                saved = cv2.imread(str(images[0]))
+                self.assertEqual(saved.shape, (640, 640, 3))
+                # Upright (flipped) and standard colours: bottom half is the
+                # former top half; RGB (10, 80, 170) reads back as BGR.
+                np.testing.assert_allclose(saved[600, 320], (200, 200, 200), atol=6)
+                np.testing.assert_allclose(saved[40, 320], (170, 80, 10), atol=6)
             self.assertTrue((directory / "session.json").is_file())
             metadata = json.loads((directory / "session.json").read_text())
             self.assertEqual(metadata["model_profile"], "phone")
-            self.assertEqual(metadata["jpeg_orientation"], "camera_native")
+            self.assertEqual(metadata["jpeg_orientation"], "inference")
+            self.assertEqual(metadata["jpeg_color"], "standard")
             self.assertTrue(metadata["inference_vertical_flip"])
 
             next_directory = recorder.start()
