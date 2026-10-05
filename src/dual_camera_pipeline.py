@@ -17,6 +17,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gst, Gtk
 
 from dataset_recorder import DatasetRecorder
+from video_recorder import VideoRecorder
 
 
 WIDTH = 640
@@ -71,6 +72,8 @@ class DualCameraPipeline:
                                         height=HEIGHT, fps=2, quality=92,
                                         profile_name=profile_name,
                                         inference_vertical_flip=flip_vertical)
+        self.video = VideoRecorder(PROJECT_ROOT / "videos", width=WIDTH,
+                                   height=HEIGHT, fps=fps)
 
         hef_path = Path(hef_path).expanduser().resolve()
         post_so = Path(post_so).expanduser().resolve()
@@ -225,6 +228,7 @@ router.src_1 !
         if len(frame) != WIDTH * HEIGHT * 3:
             self.fail(f"CAM{slot} görüntü boyutu beklenmiyor: {len(frame)}")
             return Gst.FlowReturn.ERROR
+        self.video.offer(slot, frame)
         level = float(np.frombuffer(frame, dtype=np.uint8)
                       .reshape(HEIGHT, WIDTH, 3)[::40, ::40].mean())
         with self.count_lock:
@@ -435,6 +439,19 @@ router.src_1 !
     def recording_status(self):
         return self.recorder.status()
 
+    def start_video(self):
+        if not self.started or not self.running.is_set():
+            raise RuntimeError("Önce çift kamera akışını başlatın")
+        if not (self.widget_handler and self.display_backend == "gtk"):
+            raise RuntimeError("Video kaydı yalnız gtk görüntü çıkışında çalışır")
+        return self.video.start()
+
+    def stop_video(self):
+        self.video.stop()
+
+    def video_status(self):
+        return self.video.status()
+
     def start(self):
         try:
             for index in (0, 1):
@@ -470,6 +487,7 @@ router.src_1 !
         self.stopped = True
         self.running.clear()
         self.recorder.stop()
+        self.video.stop()
         for camera in self.cameras:
             try:
                 camera.stop()

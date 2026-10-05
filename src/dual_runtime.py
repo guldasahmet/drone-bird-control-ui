@@ -244,6 +244,7 @@ class DualVisionRuntime:
         self.transition = ""
         self.started_at = 0.0
         self.last_recording_status = None
+        self.last_video_status = None
 
     def _new_tracker(self):
         return ClassAwareByteTracker(
@@ -383,6 +384,7 @@ class DualVisionRuntime:
         self.transition = ""
         self.started_at = monotonic()
         self.last_recording_status = None
+        self.last_video_status = None
         self.command = (0, 0)
         self.ages = [None, None]
         self.output_stop.clear()
@@ -530,6 +532,20 @@ class DualVisionRuntime:
             return self.pipeline.recording_status()
         return self.last_recording_status
 
+    def start_video(self):
+        if self.pipeline is None or self.status != "RUNNING":
+            raise RuntimeError("Video kaydı için önce iki kamerayı başlatın")
+        return self.pipeline.start_video()
+
+    def stop_video(self):
+        if self.pipeline is not None:
+            self.pipeline.stop_video()
+
+    def video_status(self):
+        if self.pipeline is not None:
+            return self.pipeline.video_status()
+        return self.last_video_status
+
     def stop(self):
         self.output_stop.set()
         if self.output_thread and self.output_thread.is_alive():
@@ -546,6 +562,7 @@ class DualVisionRuntime:
         if self.pipeline is not None:
             self.pipeline.stop()
             self.last_recording_status = self.pipeline.recording_status()
+            self.last_video_status = self.pipeline.video_status()
             self.pipeline = None
         self.status = "STOPPED"
         self.message = "Hazır"

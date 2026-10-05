@@ -178,6 +178,13 @@ class DualControlWindow(Gtk.Window):
         self.recording_label = label("JPEG · kamera başına 2 FPS · kalite 92", "hint")
         self.recording_label.set_line_wrap(True)
         box.pack_start(self.recording_label, False, False, 0)
+        self.video_button = Gtk.Button(label="● VİDEO KAYDINI BAŞLAT")
+        self.video_button.set_sensitive(False)
+        self.video_button.connect("clicked", self._toggle_video)
+        box.pack_start(self.video_button, False, False, 0)
+        self.video_label = label("MJPEG · kutular çizili · videos/", "hint")
+        self.video_label.set_line_wrap(True)
+        box.pack_start(self.video_label, False, False, 0)
         sidebar.pack_start(frame, False, False, 0)
 
         frame, box = panel("KONTROL DEVRİ")
@@ -255,6 +262,16 @@ class DualControlWindow(Gtk.Window):
         except Exception as error:
             self._show_error(str(error), "Dataset kaydı başlatılamadı")
 
+    def _toggle_video(self, _button):
+        try:
+            video = self.runtime.video_status()
+            if video is not None and video.active:
+                self.runtime.stop_video()
+            else:
+                self.runtime.start_video()
+        except Exception as error:
+            self._show_error(str(error), "Video kaydı başlatılamadı")
+
     def _show_error(self, message, title="Çift kamera başlatılamadı"):
         dialog = Gtk.MessageDialog(
             transient_for=self,
@@ -315,6 +332,21 @@ class DualControlWindow(Gtk.Window):
             )
         else:
             self.recording_label.set_text("JPEG · kamera başına 2 FPS · kalite 92")
+        video = self.runtime.video_status()
+        self.video_button.set_sensitive(snapshot.status == "RUNNING")
+        self.video_button.set_label(
+            "■ VİDEO KAYDINI DURDUR" if video is not None and video.active
+            else "● VİDEO KAYDINI BAŞLAT"
+        )
+        if video is not None and video.error:
+            self.video_label.set_text(f"Video hatası: {video.error}")
+        elif video is not None and video.directory is not None:
+            state = "VİDEO AÇIK" if video.active else "Video kapalı"
+            self.video_label.set_text(
+                f"{state} · {video.directory.name}\n"
+                f"CAM0 {video.saved[0]} · CAM1 {video.saved[1]} kare · "
+                f"düşen {sum(video.dropped)}"
+            )
         target = snapshot.active_target
         if target is None:
             self.target_label.set_text("HEDEF YOK")

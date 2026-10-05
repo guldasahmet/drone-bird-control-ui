@@ -30,6 +30,7 @@ native/build/
 logs/
 captures/
 dataset/
+videos/
 
 # Editor and OS files
 .idea/
