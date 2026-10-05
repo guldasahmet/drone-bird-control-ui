@@ -25,6 +25,18 @@ HEIGHT = 640
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def hailortpp_config(post_config_data):
+    """labels.json for libyolo_hailortpp_postprocess.
+
+    The library treats class 0 as background and reports model class i as
+    class_id i + 1 with label labels[i + 1]. Without a leading placeholder,
+    model DRONE (0) is shown as BIRD and BIRD (1) gets an empty label.
+    """
+    config = dict(post_config_data)
+    config["labels"] = ["unlabeled", *config["labels"]]
+    return config
+
+
 class DualCameraPipeline:
     def __init__(self, *, fps, hef_path, post_so, on_filter, on_detection,
                  post_function="filter", post_config_data=None,
@@ -87,7 +99,8 @@ class DualCameraPipeline:
             self._postprocess_temp = TemporaryDirectory(prefix="drone-bird-post-")
             post_config = Path(self._postprocess_temp.name) / "labels.json"
             post_config.write_text(
-                json.dumps(post_config_data, ensure_ascii=False), encoding="utf-8"
+                json.dumps(hailortpp_config(post_config_data), ensure_ascii=False),
+                encoding="utf-8",
             )
             post_config_option = f' config-path="{post_config}"'
         camera_flips = [

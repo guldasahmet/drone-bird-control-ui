@@ -17,6 +17,7 @@ from dual_runtime import (
     target_pixel_errors,
 )
 from uart import TargetUart
+from dual_camera_pipeline import hailortpp_config
 from model_profile import load_active_profile
 
 
@@ -51,6 +52,14 @@ class HandoffTests(unittest.TestCase):
                          "GLOBAL SHUTTER → HQ")
         self.assertEqual(controller.snapshot(now=1.22)[0], 1)
         self.assertIsNone(controller.snapshot(now=1.4)[1])
+
+    def test_hailortpp_labels_get_background_placeholder(self):
+        config = hailortpp_config(
+            {"detection_threshold": 0.1, "max_boxes": 100, "labels": ["DRONE", "BIRD"]}
+        )
+        # Model class i -> class_id i + 1 -> labels[i + 1].
+        self.assertEqual(config["labels"], ["unlabeled", "DRONE", "BIRD"])
+        self.assertEqual(config["max_boxes"], 100)
 
     def test_limit_step_ramps_toward_target_and_can_be_disabled(self):
         self.assertEqual(limit_step(0, 250, 30), 30)
