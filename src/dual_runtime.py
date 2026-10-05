@@ -27,6 +27,13 @@ def target_pixel_errors(target, *, flip_vertical=False):
     )
 
 
+def limit_step(previous, target, max_step):
+    """Move previous toward target by at most max_step (0 disables the limit)."""
+    if max_step <= 0:
+        return target
+    return previous + max(-max_step, min(max_step, target - previous))
+
+
 def add_overlay_objects(roi, width, height, tracking):
     """Keep target boxes and the active target vector with their Hailo frame."""
     red_index = 0
@@ -77,7 +84,7 @@ class TraceLog:
 
     FIELDS = ("t", "kind", "camera", "control", "candidates", "label",
               "confidence", "track_id", "error_x", "error_y",
-              "wire_x", "wire_y", "locked", "stm")
+              "wire_x", "wire_y", "locked", "stm", "age_ms")
 
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,16 +196,19 @@ class DualSnapshot:
 
 
 class DualVisionRuntime:
-    def __init__(self, widget_handler, *, profile=None, fps=30,
+    def __init__(self, widget_handler, *, profile=None, fps=None,
                  uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=25,
-                 display_backend="gtk", hold_hq=False, trace_dir=None):
+                 display_backend="gtk", hold_hq=False, trace_dir=None,
+                 max_step_px=30, queue_depth=1):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
         self.model_path = self.profile.hef
         self.postprocess_path = self.profile.postprocess_so
-        self.fps = fps
+        self.fps = fps if fps is not None else self.profile.fps
+        self.queue_depth = max(1, int(queue_depth))
+        self.ages = [None, None]
         self.confidence = self.profile.confidence
         self.uart_enabled = uart_enabled
         self.uart_port = uart_port
@@ -210,6 +220,10 @@ class DualVisionRuntime:
         self.hold_hq = hold_hq
         self.trace_dir = trace_dir
         self.trace = None
+        # Per-packet (50 ms) limit on the commanded error change; softens the
+        # STM32 start kick (D term on a reset error) when a target appears.
+        self.max_step_px = max(0, int(max_step_px))
+        self.command = (0, 0)
         self.target_ids = frozenset(self.profile.labels_by_id)
         self.target_labels = {label.casefold() for label in self.profile.target_names}
         self.pipeline = None
@@ -253,6 +267,10 @@ class DualVisionRuntime:
         if slot in (0, 1):
             self.trackers[slot].select_target(track_id)
 
+    def _age_text(self, slot):
+        age = self.ages[slot]
+        return "-" if age is None else f"{age:.0f} ms"
+
     def _target_fields(self, target):
         if target is None:
             return {}
@@ -279,6 +297,9 @@ class DualVisionRuntime:
                 roi.remove_object(detection)
 
     def _detect(self, slot, buffer):
+        pipeline = self.pipeline
+        age = pipeline.buffer_age_ms(buffer) if pipeline is not None else None
+        self.ages[slot] = age
         roi = hailo.get_roi_from_buffer(buffer)
         result = self.trackers[slot].process(roi, WIDTH, HEIGHT)
         add_overlay_objects(roi, WIDTH, HEIGHT, result)
@@ -293,6 +314,7 @@ class DualVisionRuntime:
                 "det", camera=CAMERA_NAMES[slot],
                 control=CAMERA_NAMES[self.controller.active_slot],
                 candidates=result.raw_count, **self._target_fields(active),
+                age_ms="" if age is None else f"{age:.0f}",
             )
         with self.lock:
             self.results[slot] = result
@@ -306,6 +328,8 @@ class DualVisionRuntime:
             wire_x, wire_y, locked = 0, 0, False
             try:
                 if target is None:
+                    # Stop at once on loss; the next target ramps up from zero.
+                    self.command = (0, 0)
                     self.uart.send_no_target()
                 else:
                     error_x, error_y = target_pixel_errors(
@@ -314,8 +338,18 @@ class DualVisionRuntime:
                     # Match STM32: lock only while both errors are strictly < tolerance.
                     locked = (abs(error_x) < self.lock_tolerance
                               and abs(error_y) < self.lock_tolerance)
+                    if locked:
+                        # STM32 stops both motors on lock; restart from zero.
+                        self.command = (0, 0)
+                        command_x, command_y = error_x, error_y
+                    else:
+                        command_x = limit_step(self.command[0], error_x,
+                                               self.max_step_px)
+                        command_y = limit_step(self.command[1], error_y,
+                                               self.max_step_px)
+                        self.command = (command_x, command_y)
                     wire_x, wire_y = self.uart.send_target(
-                        error_x, error_y, locked=locked
+                        command_x, command_y, locked=locked
                     )
                 message = self.uart.read_message()
                 trace = self.trace
@@ -345,6 +379,8 @@ class DualVisionRuntime:
         self.transition = ""
         self.started_at = monotonic()
         self.last_recording_status = None
+        self.command = (0, 0)
+        self.ages = [None, None]
         self.output_stop.clear()
         try:
             if self.trace_dir is not None:
@@ -352,6 +388,8 @@ class DualVisionRuntime:
                     self.trace_dir / f"trace_{datetime.now():%Y%m%d_%H%M%S}.csv"
                 )
                 print(f"İz kaydı: {self.trace.path}", flush=True)
+            print(f"Kamera FPS={self.fps}, kuyruk derinliği={self.queue_depth}",
+                  flush=True)
             self.profile.validate_hef(HEF)
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,
@@ -371,6 +409,7 @@ class DualVisionRuntime:
                 nms_iou_threshold=self.profile.nms_iou_threshold,
                 flip_vertical=self.profile.camera_flip_vertical,
                 lock_tolerance=self.lock_tolerance,
+                queue_depth=self.queue_depth,
                 on_filter=self._filter,
                 on_detection=self._detect,
                 widget_handler=self.widget_handler,
@@ -433,6 +472,7 @@ class DualVisionRuntime:
                 f"parlaklık={levels[slot]:.1f}"
                 + (f"→{sink_levels[slot]:.1f}" if self.display_backend == "gtk"
                    else "")
+                + f" | gecikme={self._age_text(slot)}"
                 + f" | aday={candidate_count} | {target_text}",
                 flush=True,
             )

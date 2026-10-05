@@ -57,6 +57,16 @@ class ModelProfileTests(unittest.TestCase):
             config.write_text(json.dumps(data), encoding="utf-8")
             self.assertTrue(load_active_profile(config).camera_flip_vertical)
 
+            self.assertEqual(load_active_profile(config).fps, 30)
+            data["profiles"]["bird"]["fps"] = 20
+            config.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(load_active_profile(config).fps, 20)
+            data["profiles"]["bird"]["fps"] = 0
+            config.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "fps"):
+                load_active_profile(config)
+            del data["profiles"]["bird"]["fps"]
+
             data["profiles"]["bird"]["postprocess"]["labels"][0] = "PHONE"
             config.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "postprocess etiketleri"):

@@ -43,6 +43,7 @@ class ModelProfile:
     nms_score_threshold: float | None
     nms_iou_threshold: float | None
     camera_flip_vertical: bool
+    fps: int = 30
 
     @property
     def labels_by_id(self):
@@ -187,6 +188,9 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
                if "nms_iou_threshold" in item else None)
     if nms_score is not None and nms_score > low:
         raise ValueError(f"{name}: nms_score_threshold low_threshold değerini aşmamalı")
+    fps = item.get("fps", 30)
+    if type(fps) is not int or not 1 <= fps <= 60:
+        raise ValueError(f"{name}: fps 1 ile 60 arasında tam sayı olmalı")
 
     return ModelProfile(
         name=name, display_name=display_name.strip(),
@@ -199,4 +203,5 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
         low_threshold=low, high_threshold=high, new_track_threshold=new,
         nms_score_threshold=nms_score, nms_iou_threshold=nms_iou,
         camera_flip_vertical=flip_vertical,
+        fps=fps,
     )

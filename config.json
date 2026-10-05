@@ -40,7 +40,8 @@
       "high_threshold": 0.25,
       "new_track_threshold": 0.35,
       "nms_score_threshold": 0.10,
-      "nms_iou_threshold": 0.45
+      "nms_iou_threshold": 0.45,
+      "fps": 20
     }
   }
 }

@@ -12,6 +12,7 @@ from dual_runtime import (
     DualVisionRuntime,
     HandoffController,
     TraceLog,
+    limit_step,
     add_overlay_objects,
     target_pixel_errors,
 )
@@ -50,6 +51,12 @@ class HandoffTests(unittest.TestCase):
                          "GLOBAL SHUTTER → HQ")
         self.assertEqual(controller.snapshot(now=1.22)[0], 1)
         self.assertIsNone(controller.snapshot(now=1.4)[1])
+
+    def test_limit_step_ramps_toward_target_and_can_be_disabled(self):
+        self.assertEqual(limit_step(0, 250, 30), 30)
+        self.assertEqual(limit_step(240, 250, 30), 250)
+        self.assertEqual(limit_step(0, -100, 30), -30)
+        self.assertEqual(limit_step(0, 250, 0), 250)
 
     def test_trace_log_writes_header_and_rows(self):
         with tempfile.TemporaryDirectory() as tmp:

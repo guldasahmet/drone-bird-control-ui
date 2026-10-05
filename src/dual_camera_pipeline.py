@@ -29,7 +29,7 @@ class DualCameraPipeline:
                  post_function="filter", post_config_data=None,
                  profile_name="phone",
                  nms_score_threshold=None, nms_iou_threshold=None,
-                 flip_vertical=False, lock_tolerance=25,
+                 flip_vertical=False, lock_tolerance=25, queue_depth=1,
                  widget_handler=None, display_backend="gtk"):
         Gst.init(None)
         if display_backend not in ("gtk", "wayland"):
@@ -118,7 +118,7 @@ class DualCameraPipeline:
             displays = ["autovideosink sync=false"] * 2
         description = f"""
 hailoroundrobin name=rr mode=0 !
-    queue name=preinfer_q max-size-buffers=3 !
+    queue name=preinfer_q max-size-buffers={queue_depth} !
     hailonet name=infer hef-path="{hef_path}" batch-size=1{nms_options} force-writable=true !
     queue name=post_q max-size-buffers=3 !
     hailofilter name=post so-path="{post_so}" function-name={post_function}{post_config_option} qos=false !
@@ -130,14 +130,14 @@ hailoroundrobin name=rr mode=0 !
         src_1::input-streams="<sink_1>"
 
 appsrc name=cam0_src is-live=true do-timestamp=true format=time
-    block=false leaky-type=downstream max-buffers=3
+    block=false leaky-type=downstream max-buffers={queue_depth}
     caps=video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={fps}/1 !
-    {camera_flips[0]}queue name=cam0_in_q leaky=downstream max-size-buffers=3 ! rr.sink_0
+    {camera_flips[0]}queue name=cam0_in_q leaky=downstream max-size-buffers={queue_depth} ! rr.sink_0
 
 appsrc name=cam1_src is-live=true do-timestamp=true format=time
-    block=false leaky-type=downstream max-buffers=3
+    block=false leaky-type=downstream max-buffers={queue_depth}
     caps=video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={fps}/1 !
-    {camera_flips[1]}queue name=cam1_in_q leaky=downstream max-size-buffers=3 ! rr.sink_1
+    {camera_flips[1]}queue name=cam1_in_q leaky=downstream max-size-buffers={queue_depth} ! rr.sink_1
 
 router.src_0 !
     queue name=cam0_display_q leaky=downstream max-size-buffers=2 !
@@ -271,6 +271,15 @@ router.src_1 !
             with self.count_lock:
                 self.render_counts[slot] += 1
         return False
+
+    def buffer_age_ms(self, buffer):
+        """Time since appsrc stamped this frame (camera push → now)."""
+        pipeline = self.pipeline
+        clock = pipeline.get_clock() if pipeline is not None else None
+        if clock is None or buffer.pts == Gst.CLOCK_TIME_NONE:
+            return None
+        running = clock.get_time() - pipeline.get_base_time()
+        return (running - buffer.pts) / Gst.MSECOND
 
     def _filter_buffer(self, _identity, buffer):
         try:

@@ -54,6 +54,9 @@ class DualControlWindow(Gtk.Window):
             display_backend=getattr(args, "display_backend", "gtk"),
             hold_hq=getattr(args, "hold_hq", False),
             trace_dir=ROOT / "logs" if getattr(args, "trace", False) else None,
+            max_step_px=getattr(args, "max_step", 30),
+            fps=getattr(args, "fps", None),
+            queue_depth=getattr(args, "queue_depth", 1),
         )
         self._load_theme()
         self._build()
@@ -399,6 +402,12 @@ def main():
                         help="Kontrolü HQ'da sabitle; GS'ye kamera devri yapma")
     parser.add_argument("--trace", action="store_true",
                         help="Kare kare tespit/UART iz kaydını logs/ altına CSV yaz")
+    parser.add_argument("--max-step", type=int, default=30,
+                        help="UART hata komutunun 50 ms'de en fazla değişimi (px); 0 kapalı")
+    parser.add_argument("--fps", type=int, default=None,
+                        help="Kamera FPS (varsayılan: profildeki fps, yoksa 30)")
+    parser.add_argument("--queue-depth", type=int, default=1,
+                        help="Hailo öncesi kuyruk derinliği (eski değer 3)")
     args = parser.parse_args()
     try:
         window = DualControlWindow(args)
