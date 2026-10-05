@@ -53,6 +53,7 @@ class DualControlWindow(Gtk.Window):
             uart_enabled=args.uart,
             display_backend=getattr(args, "display_backend", "gtk"),
             hold_hq=getattr(args, "hold_hq", False),
+            trace_dir=ROOT / "logs" if getattr(args, "trace", False) else None,
         )
         self._load_theme()
         self._build()
@@ -396,6 +397,8 @@ def main():
     )
     parser.add_argument("--hold-hq", action="store_true",
                         help="Kontrolü HQ'da sabitle; GS'ye kamera devri yapma")
+    parser.add_argument("--trace", action="store_true",
+                        help="Kare kare tespit/UART iz kaydını logs/ altına CSV yaz")
     args = parser.parse_args()
     try:
         window = DualControlWindow(args)

@@ -1,6 +1,9 @@
+import csv
 import struct
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import hailo
@@ -8,6 +11,7 @@ import hailo
 from dual_runtime import (
     DualVisionRuntime,
     HandoffController,
+    TraceLog,
     add_overlay_objects,
     target_pixel_errors,
 )
@@ -46,6 +50,19 @@ class HandoffTests(unittest.TestCase):
                          "GLOBAL SHUTTER → HQ")
         self.assertEqual(controller.snapshot(now=1.22)[0], 1)
         self.assertIsNone(controller.snapshot(now=1.4)[1])
+
+    def test_trace_log_writes_header_and_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = TraceLog(Path(tmp) / "logs" / "trace.csv")
+            trace.write("tx", control="HQ", wire_x=-12, wire_y=30, locked=0)
+            trace.close()
+            trace.write("tx")  # ignored after close
+            with open(trace.path, newline="") as file:
+                rows = list(csv.DictReader(file))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "tx")
+        self.assertEqual(rows[0]["wire_x"], "-12")
+        self.assertEqual(rows[0]["camera"], "")
 
     def test_hold_hq_never_hands_control_to_gs(self):
         controller = HandoffController(hold_hq=True)

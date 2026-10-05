@@ -1,6 +1,8 @@
 """Two live cameras, one Hailo, independent target tracks and HQ/GS control."""
 
+import csv
 from dataclasses import dataclass
+from datetime import datetime
 from threading import Event, Lock, Thread
 from time import monotonic
 
@@ -68,6 +70,36 @@ def add_overlay_objects(roi, width, height, tracking):
                 [(0, 1)],
             )
         )
+
+
+class TraceLog:
+    """Per-frame detections, sent UART commands and STM32 replies as CSV."""
+
+    FIELDS = ("t", "kind", "camera", "control", "candidates", "label",
+              "confidence", "track_id", "error_x", "error_y",
+              "wire_x", "wire_y", "locked", "stm")
+
+    def __init__(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.lock = Lock()
+        self.started_at = monotonic()
+        self.file = open(path, "w", newline="", buffering=1)
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(self.FIELDS)
+
+    def write(self, kind, **values):
+        row = [f"{monotonic() - self.started_at:.3f}", kind]
+        row += [values.get(name, "") for name in self.FIELDS[2:]]
+        with self.lock:
+            if self.file is not None:
+                self.writer.writerow(row)
+
+    def close(self):
+        with self.lock:
+            if self.file is not None:
+                self.file.close()
+                self.file = None
 
 
 class HandoffController:
@@ -161,7 +193,7 @@ class DualVisionRuntime:
                  uart_enabled=False,
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=25,
-                 display_backend="gtk", hold_hq=False):
+                 display_backend="gtk", hold_hq=False, trace_dir=None):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
         self.model_path = self.profile.hef
@@ -176,6 +208,8 @@ class DualVisionRuntime:
         self.lock_tolerance = lock_tolerance
         self.display_backend = display_backend
         self.hold_hq = hold_hq
+        self.trace_dir = trace_dir
+        self.trace = None
         self.target_ids = frozenset(self.profile.labels_by_id)
         self.target_labels = {label.casefold() for label in self.profile.target_names}
         self.pipeline = None
@@ -219,6 +253,20 @@ class DualVisionRuntime:
         if slot in (0, 1):
             self.trackers[slot].select_target(track_id)
 
+    def _target_fields(self, target):
+        if target is None:
+            return {}
+        error_x, error_y = target_pixel_errors(
+            target, flip_vertical=self.profile.camera_flip_vertical
+        )
+        return {
+            "label": target.label,
+            "confidence": f"{target.confidence:.2f}",
+            "track_id": target.track_id,
+            "error_x": error_x,
+            "error_y": error_y,
+        }
+
     def _filter(self, buffer):
         roi = hailo.get_roi_from_buffer(buffer)
         for detection in list(roi.get_objects_typed(hailo.HAILO_DETECTION)):
@@ -239,6 +287,13 @@ class DualVisionRuntime:
             None,
         )
         transition = self.controller.observe(slot, active)
+        trace = self.trace
+        if trace is not None:
+            trace.write(
+                "det", camera=CAMERA_NAMES[slot],
+                control=CAMERA_NAMES[self.controller.active_slot],
+                candidates=result.raw_count, **self._target_fields(active),
+            )
         with self.lock:
             self.results[slot] = result
             if transition:
@@ -247,7 +302,8 @@ class DualVisionRuntime:
 
     def _output_worker(self):
         while not self.output_stop.wait(0.05):
-            _, target, _ = self.controller.snapshot()
+            active_slot, target, _ = self.controller.snapshot()
+            wire_x, wire_y, locked = 0, 0, False
             try:
                 if target is None:
                     self.uart.send_no_target()
@@ -258,8 +314,19 @@ class DualVisionRuntime:
                     # Match STM32: lock only while both errors are strictly < tolerance.
                     locked = (abs(error_x) < self.lock_tolerance
                               and abs(error_y) < self.lock_tolerance)
-                    self.uart.send_target(error_x, error_y, locked=locked)
-                self.uart.read_message()
+                    wire_x, wire_y = self.uart.send_target(
+                        error_x, error_y, locked=locked
+                    )
+                message = self.uart.read_message()
+                trace = self.trace
+                if trace is not None:
+                    trace.write(
+                        "tx", control=CAMERA_NAMES[active_slot],
+                        wire_x=wire_x, wire_y=wire_y, locked=int(locked),
+                        **self._target_fields(target),
+                    )
+                    if message:
+                        trace.write("stm", stm=message)
             except Exception as error:
                 with self.lock:
                     self.message = f"UART hatası: {error}"
@@ -280,6 +347,11 @@ class DualVisionRuntime:
         self.last_recording_status = None
         self.output_stop.clear()
         try:
+            if self.trace_dir is not None:
+                self.trace = TraceLog(
+                    self.trace_dir / f"trace_{datetime.now():%Y%m%d_%H%M%S}.csv"
+                )
+                print(f"İz kaydı: {self.trace.path}", flush=True)
             self.profile.validate_hef(HEF)
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,
@@ -418,6 +490,9 @@ class DualVisionRuntime:
         if self.output_thread and self.output_thread.is_alive():
             self.output_thread.join(timeout=1.0)
         self.output_thread = None
+        if self.trace is not None:
+            self.trace.close()
+            self.trace = None
         if self.uart is not None:
             if self.uart.connected:
                 self.uart.send_no_target()
