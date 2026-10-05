@@ -30,6 +30,7 @@ class DualCameraPipeline:
                  profile_name="phone",
                  nms_score_threshold=None, nms_iou_threshold=None,
                  flip_vertical=False, lock_tolerance=25, queue_depth=1,
+                 batch_size=1,
                  widget_handler=None, display_backend="gtk"):
         Gst.init(None)
         if display_backend not in ("gtk", "wayland"):
@@ -119,7 +120,7 @@ class DualCameraPipeline:
         description = f"""
 hailoroundrobin name=rr mode=0 !
     queue name=preinfer_q max-size-buffers={queue_depth} !
-    hailonet name=infer hef-path="{hef_path}" batch-size=1{nms_options} force-writable=true !
+    hailonet name=infer hef-path="{hef_path}" batch-size={batch_size}{nms_options} force-writable=true !
     queue name=post_q max-size-buffers=3 !
     hailofilter name=post so-path="{post_so}" function-name={post_function}{post_config_option} qos=false !
     queue name=overlay_q max-size-buffers=3 !

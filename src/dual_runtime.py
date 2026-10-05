@@ -201,13 +201,17 @@ class DualVisionRuntime:
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=25,
                  display_backend="gtk", hold_hq=False, trace_dir=None,
-                 max_step_px=30, queue_depth=1):
+                 max_step_px=30, queue_depth=1, batch_size=None):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
         self.model_path = self.profile.hef
         self.postprocess_path = self.profile.postprocess_so
         self.fps = fps if fps is not None else self.profile.fps
         self.queue_depth = max(1, int(queue_depth))
+        # Multi-context HEFs amortise context switches over a batch; with two
+        # cameras, batch 2 takes one frame from each.
+        self.batch_size = (batch_size if batch_size is not None
+                           else self.profile.batch_size)
         self.ages = [None, None]
         self.confidence = self.profile.confidence
         self.uart_enabled = uart_enabled
@@ -388,8 +392,8 @@ class DualVisionRuntime:
                     self.trace_dir / f"trace_{datetime.now():%Y%m%d_%H%M%S}.csv"
                 )
                 print(f"İz kaydı: {self.trace.path}", flush=True)
-            print(f"Kamera FPS={self.fps}, kuyruk derinliği={self.queue_depth}",
-                  flush=True)
+            print(f"Kamera FPS={self.fps}, kuyruk derinliği={self.queue_depth}, "
+                  f"batch={self.batch_size}", flush=True)
             self.profile.validate_hef(HEF)
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,
@@ -410,6 +414,7 @@ class DualVisionRuntime:
                 flip_vertical=self.profile.camera_flip_vertical,
                 lock_tolerance=self.lock_tolerance,
                 queue_depth=self.queue_depth,
+                batch_size=self.batch_size,
                 on_filter=self._filter,
                 on_detection=self._detect,
                 widget_handler=self.widget_handler,

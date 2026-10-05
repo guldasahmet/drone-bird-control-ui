@@ -66,6 +66,17 @@ class ModelProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fps"):
                 load_active_profile(config)
             del data["profiles"]["bird"]["fps"]
+            config.write_text(json.dumps(data), encoding="utf-8")
+
+            self.assertEqual(load_active_profile(config).batch_size, 1)
+            data["profiles"]["bird"]["batch_size"] = 2
+            config.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(load_active_profile(config).batch_size, 2)
+            data["profiles"]["bird"]["batch_size"] = 0
+            config.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "batch_size"):
+                load_active_profile(config)
+            del data["profiles"]["bird"]["batch_size"]
 
             data["profiles"]["bird"]["postprocess"]["labels"][0] = "PHONE"
             config.write_text(json.dumps(data), encoding="utf-8")

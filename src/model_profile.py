@@ -44,6 +44,7 @@ class ModelProfile:
     nms_iou_threshold: float | None
     camera_flip_vertical: bool
     fps: int = 30
+    batch_size: int = 1
 
     @property
     def labels_by_id(self):
@@ -191,6 +192,9 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
     fps = item.get("fps", 30)
     if type(fps) is not int or not 1 <= fps <= 60:
         raise ValueError(f"{name}: fps 1 ile 60 arasında tam sayı olmalı")
+    batch_size = item.get("batch_size", 1)
+    if type(batch_size) is not int or not 1 <= batch_size <= 8:
+        raise ValueError(f"{name}: batch_size 1 ile 8 arasında tam sayı olmalı")
 
     return ModelProfile(
         name=name, display_name=display_name.strip(),
@@ -204,4 +208,5 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
         nms_score_threshold=nms_score, nms_iou_threshold=nms_iou,
         camera_flip_vertical=flip_vertical,
         fps=fps,
+        batch_size=batch_size,
     )
