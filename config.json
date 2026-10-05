@@ -1,5 +1,5 @@
 {
-  "active_profile": "phone",
+  "active_profile": "drone_bird",
   "camera": {"flip_vertical": true},
   "profiles": {
     "phone": {

@@ -37,3 +37,6 @@ dataset/
 *.swp
 *~
 .DS_Store
+
+# Local assistant notes
+CLAUDE.md
