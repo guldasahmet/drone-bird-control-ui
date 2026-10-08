@@ -55,6 +55,7 @@ class DualControlWindow(Gtk.Window):
             hold_hq=getattr(args, "hold_hq", False),
             trace_dir=ROOT / "logs" if getattr(args, "trace", False) else None,
             max_step_px=getattr(args, "max_step", 30),
+            unlock_tolerance=getattr(args, "unlock_px", 50),
             fps=getattr(args, "fps", None),
             queue_depth=getattr(args, "queue_depth", 1),
             batch_size=getattr(args, "batch_size", None),
@@ -443,6 +444,8 @@ def main():
                         help="Hailo öncesi kuyruk derinliği (eski değer 3)")
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Hailo batch boyutu (varsayılan: profildeki batch_size, yoksa 1)")
+    parser.add_argument("--unlock-px", type=int, default=50,
+                        help="Kilidin bırakıldığı hata (px); kilitlenme 25 px altında")
     args = parser.parse_args()
     try:
         window = DualControlWindow(args)

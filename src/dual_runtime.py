@@ -16,6 +16,9 @@ from uart import TargetUart
 
 
 CAMERA_NAMES = ("GLOBAL SHUTTER", "HQ")
+# A lock survives detection dropouts shorter than this (no target -> motors
+# still get the stop packet; only the hysteresis state is kept).
+LOCK_HOLD_GAP_S = 0.5
 
 
 def target_pixel_errors(target, *, flip_vertical=False):
@@ -25,6 +28,12 @@ def target_pixel_errors(target, *, flip_vertical=False):
         int(target.center_x * WIDTH) - WIDTH // 2,
         int(camera_y * HEIGHT) - HEIGHT // 2,
     )
+
+
+def lock_with_hysteresis(error_x, error_y, held, lock_px, unlock_px):
+    """Lock when both errors < lock_px; once locked, stay until one reaches unlock_px."""
+    limit = unlock_px if held else lock_px
+    return abs(error_x) < limit and abs(error_y) < limit
 
 
 def limit_step(previous, target, max_step):
@@ -201,7 +210,8 @@ class DualVisionRuntime:
                  uart_port="/dev/ttyACM0", baudrate=115200,
                  invert_x=True, invert_y=True, lock_tolerance=25,
                  display_backend="gtk", hold_hq=False, trace_dir=None,
-                 max_step_px=30, queue_depth=1, batch_size=None):
+                 max_step_px=30, queue_depth=1, batch_size=None,
+                 unlock_tolerance=50):
         self.widget_handler = widget_handler
         self.profile = profile or load_active_profile()
         self.model_path = self.profile.hef
@@ -228,6 +238,11 @@ class DualVisionRuntime:
         # STM32 start kick (D term on a reset error) when a target appears.
         self.max_step_px = max(0, int(max_step_px))
         self.command = (0, 0)
+        # Hysteresis: lock below lock_tolerance, release only at unlock_tolerance,
+        # so small jitter around 25 px does not stop/start the motors.
+        self.unlock_tolerance = max(self.lock_tolerance, int(unlock_tolerance))
+        self.lock_held = False
+        self.last_target_at = 0.0
         self.target_ids = frozenset(self.profile.labels_by_id)
         self.target_labels = {label.casefold() for label in self.profile.target_names}
         self.pipeline = None
@@ -332,17 +347,24 @@ class DualVisionRuntime:
             active_slot, target, _ = self.controller.snapshot()
             wire_x, wire_y, locked = 0, 0, False
             try:
+                now = monotonic()
                 if target is None:
                     # Stop at once on loss; the next target ramps up from zero.
                     self.command = (0, 0)
+                    if now - self.last_target_at > LOCK_HOLD_GAP_S:
+                        self.lock_held = False
                     self.uart.send_no_target()
                 else:
                     error_x, error_y = target_pixel_errors(
                         target, flip_vertical=self.profile.camera_flip_vertical
                     )
-                    # Match STM32: lock only while both errors are strictly < tolerance.
-                    locked = (abs(error_x) < self.lock_tolerance
-                              and abs(error_y) < self.lock_tolerance)
+                    # Enter lock like STM32 (both < tolerance); leave at unlock_tolerance.
+                    self.last_target_at = now
+                    locked = lock_with_hysteresis(
+                        error_x, error_y, self.lock_held,
+                        self.lock_tolerance, self.unlock_tolerance,
+                    )
+                    self.lock_held = locked
                     if locked:
                         # STM32 stops both motors on lock; restart from zero.
                         self.command = (0, 0)
@@ -386,6 +408,8 @@ class DualVisionRuntime:
         self.last_recording_status = None
         self.last_video_status = None
         self.command = (0, 0)
+        self.lock_held = False
+        self.last_target_at = 0.0
         self.ages = [None, None]
         self.output_stop.clear()
         try:
@@ -395,7 +419,8 @@ class DualVisionRuntime:
                 )
                 print(f"İz kaydı: {self.trace.path}", flush=True)
             print(f"Kamera FPS={self.fps}, kuyruk derinliği={self.queue_depth}, "
-                  f"batch={self.batch_size}", flush=True)
+                  f"batch={self.batch_size}, kilit <{self.lock_tolerance} px / "
+                  f"bırakma ≥{self.unlock_tolerance} px", flush=True)
             self.profile.validate_hef(HEF)
             self.uart = TargetUart(
                 self.uart_enabled, self.uart_port, self.baudrate,

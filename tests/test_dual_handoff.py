@@ -13,6 +13,7 @@ from dual_runtime import (
     HandoffController,
     TraceLog,
     limit_step,
+    lock_with_hysteresis,
     add_overlay_objects,
     target_pixel_errors,
 )
@@ -60,6 +61,13 @@ class HandoffTests(unittest.TestCase):
         # Model class i -> class_id i + 1 -> labels[i + 1].
         self.assertEqual(config["labels"], ["unlabeled", "DRONE", "BIRD"])
         self.assertEqual(config["max_boxes"], 100)
+
+    def test_lock_hysteresis_enters_at_25_and_releases_at_50(self):
+        self.assertFalse(lock_with_hysteresis(30, 0, False, 25, 50))
+        self.assertTrue(lock_with_hysteresis(24, -24, False, 25, 50))
+        self.assertTrue(lock_with_hysteresis(40, -49, True, 25, 50))
+        self.assertFalse(lock_with_hysteresis(50, 0, True, 25, 50))
+        self.assertFalse(lock_with_hysteresis(0, -60, True, 25, 50))
 
     def test_limit_step_ramps_toward_target_and_can_be_disabled(self):
         self.assertEqual(limit_step(0, 250, 30), 30)
