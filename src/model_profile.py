@@ -45,6 +45,9 @@ class ModelProfile:
     camera_flip_vertical: bool
     fps: int = 30
     batch_size: int = 1
+    # Per camera slot (0 = GS, 1 = HQ): (x, y) factors converting its pixel
+    # error to HQ-equivalent pixels, so control gain and lock size match.
+    camera_error_scale: tuple = ((1.0, 1.0), (1.0, 1.0))
 
     @property
     def labels_by_id(self):
@@ -85,6 +88,16 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
     if not isinstance(camera, dict) or type(camera.get("flip_vertical", False)) is not bool:
         raise ValueError("camera.flip_vertical true veya false olmalı")
     flip_vertical = camera.get("flip_vertical", False)
+    scale_data = camera.get("error_scale", {})
+    if not isinstance(scale_data, dict):
+        raise ValueError("camera.error_scale nesne olmalı")
+    error_scale = []
+    for key in ("global_shutter", "hq"):
+        pair = scale_data.get(key, [1.0, 1.0])
+        if (not isinstance(pair, list) or len(pair) != 2
+                or any(type(v) not in (float, int) or not 0 < v <= 4 for v in pair)):
+            raise ValueError(f"camera.error_scale.{key} iki sayı (0–4] olmalı")
+        error_scale.append((float(pair[0]), float(pair[1])))
 
     def file_path(key, required=True):
         value = item.get(key)
@@ -209,4 +222,5 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
         camera_flip_vertical=flip_vertical,
         fps=fps,
         batch_size=batch_size,
+        camera_error_scale=tuple(error_scale),
     )

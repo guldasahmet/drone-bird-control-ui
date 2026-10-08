@@ -1,6 +1,9 @@
 {
   "active_profile": "drone_bird",
-  "camera": {"flip_vertical": true},
+  "camera": {
+    "flip_vertical": true,
+    "error_scale": {"global_shutter": [0.50, 0.62], "hq": [1.0, 1.0]}
+  },
   "profiles": {
     "phone": {
       "display_name": "Telefon",

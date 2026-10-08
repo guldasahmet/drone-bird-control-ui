@@ -68,6 +68,19 @@ class ModelProfileTests(unittest.TestCase):
             del data["profiles"]["bird"]["fps"]
             config.write_text(json.dumps(data), encoding="utf-8")
 
+            self.assertEqual(load_active_profile(config).camera_error_scale,
+                             ((1.0, 1.0), (1.0, 1.0)))
+            data["camera"]["error_scale"] = {"global_shutter": [0.5, 0.62]}
+            config.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(load_active_profile(config).camera_error_scale,
+                             ((0.5, 0.62), (1.0, 1.0)))
+            data["camera"]["error_scale"] = {"hq": [0, 1]}
+            config.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "error_scale"):
+                load_active_profile(config)
+            del data["camera"]["error_scale"]
+            config.write_text(json.dumps(data), encoding="utf-8")
+
             self.assertEqual(load_active_profile(config).batch_size, 1)
             data["profiles"]["bird"]["batch_size"] = 2
             config.write_text(json.dumps(data), encoding="utf-8")

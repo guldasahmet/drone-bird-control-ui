@@ -291,6 +291,14 @@ class DualVisionRuntime:
         age = self.ages[slot]
         return "-" if age is None else f"{age:.0f} ms"
 
+    def _control_errors(self, slot, target):
+        """Pixel error of the controlling camera in HQ-equivalent pixels."""
+        error_x, error_y = target_pixel_errors(
+            target, flip_vertical=self.profile.camera_flip_vertical
+        )
+        scale_x, scale_y = self.profile.camera_error_scale[slot]
+        return round(error_x * scale_x), round(error_y * scale_y)
+
     def _target_fields(self, target):
         if target is None:
             return {}
@@ -355,9 +363,7 @@ class DualVisionRuntime:
                         self.lock_held = False
                     self.uart.send_no_target()
                 else:
-                    error_x, error_y = target_pixel_errors(
-                        target, flip_vertical=self.profile.camera_flip_vertical
-                    )
+                    error_x, error_y = self._control_errors(active_slot, target)
                     # Enter lock like STM32 (both < tolerance); leave at unlock_tolerance.
                     self.last_target_at = now
                     locked = lock_with_hysteresis(
@@ -516,9 +522,7 @@ class DualVisionRuntime:
         if self.uart_enabled and self.uart is not None:
             wire_x, wire_y = (
                 (0, 0) if target is None
-                else self.uart.wire_errors(*target_pixel_errors(
-                    target, flip_vertical=self.profile.camera_flip_vertical
-                ))
+                else self.uart.wire_errors(*self._control_errors(active, target))
             )
             wire_text = f" | STM hata=({wire_x:+d},{wire_y:+d})"
         print(

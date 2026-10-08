@@ -62,6 +62,14 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(config["labels"], ["unlabeled", "DRONE", "BIRD"])
         self.assertEqual(config["max_boxes"], 100)
 
+    def test_gs_errors_are_scaled_to_hq_pixels(self):
+        runtime = DualVisionRuntime(lambda _slot, _widget: None)
+        runtime.profile = replace(runtime.profile, camera_flip_vertical=False,
+                                  camera_error_scale=((0.5, 0.62), (1.0, 1.0)))
+        target = SimpleNamespace(center_x=0.75, center_y=0.25)  # (+160, -160) px
+        self.assertEqual(runtime._control_errors(0, target), (80, -99))
+        self.assertEqual(runtime._control_errors(1, target), (160, -160))
+
     def test_lock_hysteresis_enters_at_25_and_releases_at_50(self):
         self.assertFalse(lock_with_hysteresis(30, 0, False, 25, 50))
         self.assertTrue(lock_with_hysteresis(24, -24, False, 25, 50))
