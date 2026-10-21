@@ -22,7 +22,7 @@
     },
     "drone_bird": {
       "display_name": "Drone / Bird",
-      "hef": "models/drone_bird_v8s.hef",
+      "hef": "models/drone_bird_v8s_v5.hef",
       "postprocess_so": "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so",
       "postprocess_function": "filter",
       "postprocess": {
