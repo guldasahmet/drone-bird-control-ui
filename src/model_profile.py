@@ -45,6 +45,7 @@ class ModelProfile:
     camera_flip_vertical: bool
     fps: int = 30
     batch_size: int = 1
+    track_buffer: int = 15  # frames a lost track is remembered (votes kept)
     # Per camera slot (0 = GS, 1 = HQ): (x, y) factors converting its pixel
     # error to HQ-equivalent pixels, so control gain and lock size match.
     camera_error_scale: tuple = ((1.0, 1.0), (1.0, 1.0))
@@ -205,6 +206,9 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
     fps = item.get("fps", 30)
     if type(fps) is not int or not 1 <= fps <= 60:
         raise ValueError(f"{name}: fps 1 ile 60 arasında tam sayı olmalı")
+    track_buffer = item.get("track_buffer", 15)
+    if type(track_buffer) is not int or not 1 <= track_buffer <= 300:
+        raise ValueError(f"{name}: track_buffer 1 ile 300 arasında tam sayı olmalı")
     batch_size = item.get("batch_size", 1)
     if type(batch_size) is not int or not 1 <= batch_size <= 8:
         raise ValueError(f"{name}: batch_size 1 ile 8 arasında tam sayı olmalı")
@@ -222,5 +226,6 @@ def load_active_profile(config_path=DEFAULT_CONFIG):
         camera_flip_vertical=flip_vertical,
         fps=fps,
         batch_size=batch_size,
+        track_buffer=track_buffer,
         camera_error_scale=tuple(error_scale),
     )

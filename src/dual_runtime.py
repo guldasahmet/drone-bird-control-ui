@@ -93,7 +93,7 @@ class TraceLog:
 
     FIELDS = ("t", "kind", "camera", "control", "candidates", "label",
               "confidence", "track_id", "error_x", "error_y",
-              "wire_x", "wire_y", "locked", "stm", "age_ms")
+              "wire_x", "wire_y", "locked", "stm", "age_ms", "raw_label")
 
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,6 +274,7 @@ class DualVisionRuntime:
             new_track_threshold=self.profile.new_track_threshold,
             display_threshold=self.confidence,
             min_confirmed_hits=2,
+            track_buffer=self.profile.track_buffer,
             lock_tolerance_px=self.lock_tolerance,
         )
 
@@ -307,6 +308,7 @@ class DualVisionRuntime:
         )
         return {
             "label": target.label,
+            "raw_label": target.raw_label,
             "confidence": f"{target.confidence:.2f}",
             "track_id": target.track_id,
             "error_x": error_x,

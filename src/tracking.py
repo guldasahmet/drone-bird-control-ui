@@ -1,5 +1,6 @@
-"""Telefon hedefleri için ByteTrack ve aktif hedef seçimi."""
+"""Hedefler için sınıftan bağımsız ByteTrack, sınıf oylaması ve aktif hedef seçimi."""
 
+from collections import Counter, deque
 from dataclasses import dataclass
 from math import hypot
 from threading import RLock
@@ -33,6 +34,7 @@ class TargetTelemetry:
     dx_norm: float
     dy_norm: float
     error_norm: float
+    raw_label: str = ""  # modelin bu karedeki sınıfı; label oylanmış sınıftır
 
 
 @dataclass(frozen=True)
@@ -127,7 +129,7 @@ def _deduplicate_candidates(candidates, maximum_iou=0.70):
     return kept
 
 
-def _target_telemetry(track_id, label, confidence, box, width, height):
+def _target_telemetry(track_id, label, confidence, box, width, height, raw_label=""):
     if width <= 0 or height <= 0:
         raise ValueError("Görüntü genişliği ve yüksekliği pozitif olmalı")
 
@@ -166,11 +168,18 @@ def _target_telemetry(track_id, label, confidence, box, width, height):
         dx_norm=dx_norm,
         dy_norm=dy_norm,
         error_norm=hypot(dx_norm, dy_norm),
+        raw_label=raw_label,
     )
 
 
 class ClassAwareByteTracker:
-    """Her sınıfı ayrı izler ve önceliğe göre tek aktif hedef seçer."""
+    """Tüm sınıfları tek ByteTrack ile izler; izin sınıfını oylamayla belirler.
+
+    Model aynı nesneye bir karede farklı sınıf derse iz numarası değişmez.
+    confirm_label (varsayılan: önceliğin ilki, ör. DRONE) yalnız son
+    vote_window oyun en az vote_min tanesi varken vote_share'den fazlası
+    o sınıfsa verilir; aksi halde iz diğer sınıfların çoğunluğunu alır.
+    """
 
     def __init__(
         self,
@@ -188,6 +197,10 @@ class ClassAwareByteTracker:
         priority_labels=CLASS_LABELS,
         sticky_labels=("CELL PHONE",),
         labels_by_id=None,
+        vote_window=15,
+        vote_min=10,
+        vote_share=0.60,
+        confirm_label=None,
     ):
         self._lock = RLock()
 
@@ -214,8 +227,17 @@ class ClassAwareByteTracker:
             raise ValueError("Öncelik sırası takip sınıflarını tam olarak içermeli")
         if not self.sticky_labels.issubset(self.class_labels):
             raise ValueError("Sabit tutulacak sınıflar takip sınıflarında bulunmalı")
+        self.vote_window = max(1, int(vote_window))
+        self.vote_min = max(1, int(vote_min))
+        self.vote_share = float(vote_share)
+        if confirm_label is None and len(self.class_labels) > 1:
+            confirm_label = self.priority_labels[0]
+        self.confirm_label = None if confirm_label is None else confirm_label.upper()
+        if self.confirm_label is not None and self.confirm_label not in self.class_labels:
+            raise ValueError("Onay sınıfı takip sınıflarında bulunmalı")
 
-        self.trackers = {}
+        self.tracker = None
+        self.votes = {}
         self.confirmed_ids = set()
         self.active_id = None
         self.manual_id = None
@@ -234,12 +256,9 @@ class ClassAwareByteTracker:
                 mot20=False,
             )
 
-            self.trackers = {}
-
-            for label in self.class_labels:
-                tracker = BYTETracker(args, frame_rate=self.frame_rate)
-                tracker.det_thresh = self.new_track_threshold
-                self.trackers[label] = tracker
+            self.tracker = BYTETracker(args, frame_rate=self.frame_rate)
+            self.tracker.det_thresh = self.new_track_threshold
+            self.votes = {}
 
             self.confirmed_ids.clear()
             self.active_id = None
@@ -270,14 +289,14 @@ class ClassAwareByteTracker:
             for detection in raw_detections:
                 roi.remove_object(detection)
 
-            grouped = {label: [] for label in self.class_labels}
+            candidates = []
 
             for detection in raw_detections:
                 label = (detection.get_label().upper()
                          if self.labels_by_id is None else
                          self.labels_by_id.get(detection.get_class_id()))
 
-                if label not in grouped:
+                if label not in self.class_labels:
                     continue
 
                 confidence = float(detection.get_confidence())
@@ -286,72 +305,73 @@ class ClassAwareByteTracker:
                 if box is None or confidence < self.low_threshold:
                     continue
 
-                grouped[label].append((detection, box, confidence))
+                candidates.append((detection, box, confidence, label))
 
-            for label in self.class_labels:
-                grouped[label] = _deduplicate_candidates(grouped[label])
+            # One object may get both a DRONE and a BIRD box; keep the stronger.
+            candidates = _deduplicate_candidates(candidates, maximum_iou=0.50)
+            raw_count = len(candidates)
 
-            raw_count = sum(
-                len(candidates) for candidates in grouped.values()
-            )
+            if candidates:
+                tracker_input = np.asarray(
+                    [
+                        [box[0], box[1], box[2], box[3], confidence]
+                        for _detection, box, confidence, _label in candidates
+                    ],
+                    dtype=np.float64,
+                ).reshape(-1, 5)
+            else:
+                tracker_input = np.empty((0, 5), dtype=np.float64)
+
+            online_tracks = self.tracker.update(tracker_input)
+
+            visible_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate[2] >= self.display_threshold
+            ]
+            visible_tracks = [
+                track
+                for track in online_tracks
+                if float(track.score) >= self.display_threshold
+            ]
 
             targets = []
 
-            for label in self.class_labels:
-                candidates = grouped[label]
+            for track, candidate in _greedy_matches(
+                visible_tracks,
+                visible_candidates,
+                self.display_match_iou,
+            ):
+                track_id = int(track.track_id)
+                raw_label = candidate[3]
+                self.votes.setdefault(
+                    track_id, deque(maxlen=self.vote_window)
+                ).append(raw_label)
+                confirmed = track_id in self.confirmed_ids
 
-                if candidates:
-                    tracker_input = np.asarray(
-                        [
-                            [box[0], box[1], box[2], box[3], confidence]
-                            for _detection, box, confidence in candidates
-                        ],
-                        dtype=np.float64,
-                    ).reshape(-1, 5)
-                else:
-                    tracker_input = np.empty((0, 5), dtype=np.float64)
-
-                online_tracks = self.trackers[label].update(tracker_input)
-
-                visible_candidates = [
-                    candidate
-                    for candidate in candidates
-                    if candidate[2] >= self.display_threshold
-                ]
-                visible_tracks = [
-                    track
-                    for track in online_tracks
-                    if float(track.score) >= self.display_threshold
-                ]
-
-                for track, candidate in _greedy_matches(
-                    visible_tracks,
-                    visible_candidates,
-                    self.display_match_iou,
+                if (
+                    not confirmed
+                    and track.tracklet_len + 1 >= self.min_confirmed_hits
                 ):
-                    track_id = int(track.track_id)
-                    confirmed = track_id in self.confirmed_ids
+                    self.confirmed_ids.add(track_id)
+                    confirmed = True
 
-                    if (
-                        not confirmed
-                        and track.tracklet_len + 1 >= self.min_confirmed_hits
-                    ):
-                        self.confirmed_ids.add(track_id)
-                        confirmed = True
+                if not confirmed:
+                    continue
 
-                    if not confirmed:
-                        continue
-
-                    targets.append(
-                        _target_telemetry(
-                            track_id,
-                            label,
-                            candidate[2],
-                            candidate[1],
-                            width,
-                            height,
-                        )
+                targets.append(
+                    _target_telemetry(
+                        track_id,
+                        self._voted_label(track_id),
+                        candidate[2],
+                        candidate[1],
+                        width,
+                        height,
+                        raw_label=raw_label,
                     )
+                )
+
+            self._forget_dead_tracks()
 
             targets.sort(key=lambda target: target.track_id)
             self._select_active_target(targets)
@@ -364,6 +384,31 @@ class ClassAwareByteTracker:
                 lock_seconds=lock_seconds,
                 raw_count=raw_count,
             )
+
+    def _voted_label(self, track_id):
+        votes = self.votes[track_id]
+        counts = Counter(votes)
+
+        if self.confirm_label is None:
+            return counts.most_common(1)[0][0]
+
+        if (len(votes) >= self.vote_min
+                and counts[self.confirm_label] / len(votes) > self.vote_share):
+            return self.confirm_label
+
+        others = [(count, label) for label, count in counts.items()
+                  if label != self.confirm_label]
+        if others:
+            return max(others)[1]
+        return next(label for label in self.class_labels
+                    if label != self.confirm_label)
+
+    def _forget_dead_tracks(self):
+        alive = {int(track.track_id) for track in
+                 self.tracker.tracked_stracks + self.tracker.lost_stracks}
+        for track_id in [key for key in self.votes if key not in alive]:
+            del self.votes[track_id]
+        self.confirmed_ids &= alive | {self.active_id, self.manual_id}
 
     def _select_active_target(self, targets):
         visible_by_id = {target.track_id: target for target in targets}
